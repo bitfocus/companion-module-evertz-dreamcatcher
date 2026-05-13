@@ -1,1 +1,26 @@
-
+{
+  "id": "evertz-dreamcatcher",
+  "name": "DreamCatcher",
+  "shortname": "DreamCatcher",
+  "description": "Control Evertz DreamCatcher via JSON-RPC TCP API",
+  "version": "1.0.0",
+  "license": "MIT",
+  "manufacturer": "Evertz",
+  "products": ["DreamCatcher"],
+  "keywords": ["Replay", "JSON-RPC", "TCP"],
+  "repository": "git+https://github.com/bitfocus/companion-module-evertz-dreamcatcher/.git",
+  "bugs": "https://github.com/bitfocus/companion-module-evertz-dreamcatcher/issues",
+  "maintainers": [
+    {
+      "name": "Rhyce Woodhill",
+      "email": "rhyce@me.com"
+    }
+  ],
+  "legacyIds": [],
+  "runtime": {
+    "type": "node18",
+    "api": "nodejs-ipc",
+    "apiVersion": "0.0.0",
+    "entrypoint": "../dist/main.js"
+  }
+}
