@@ -476,7 +476,7 @@ class DC extends InstanceBase<Config, undefined> {
 
 	private resolvePlaylistIdentifier(
 		dropdownPlaylistId: string,
-		readableId: string
+		readableId: string,
 	): { playlist_id?: string; readable_id?: string } | null {
 		const manualReadableId = readableId.trim()
 		if (manualReadableId) return { readable_id: manualReadableId }
@@ -711,7 +711,7 @@ class DC extends InstanceBase<Config, undefined> {
 		outputIds: string[],
 		mask: number | null,
 		speed: number,
-		playAfterCue: boolean
+		playAfterCue: boolean,
 	): void {
 		const id = this.requestId++
 
@@ -746,7 +746,7 @@ class DC extends InstanceBase<Config, undefined> {
 		outputIds: string[],
 		mask: number | null,
 		speed: number,
-		playAfterCue: boolean
+		playAfterCue: boolean,
 	): void {
 		const id = this.requestId++
 
@@ -932,7 +932,7 @@ class DC extends InstanceBase<Config, undefined> {
 						String(event.options.page || 1),
 						String(event.options.bank || 1),
 						String(event.options.slot || 1),
-						String(event.options.angle || 'A')
+						String(event.options.angle || 'A'),
 					)
 
 					this.log('info', `Looking up session clip ${readableId}`)
@@ -942,7 +942,7 @@ class DC extends InstanceBase<Config, undefined> {
 						outputIds,
 						mask,
 						Number(event.options.speed || 0),
-						false
+						false,
 					)
 				},
 			},
@@ -981,7 +981,7 @@ class DC extends InstanceBase<Config, undefined> {
 						String(event.options.page || 1),
 						String(event.options.bank || 1),
 						String(event.options.slot || 1),
-						String(event.options.angle || 'A')
+						String(event.options.angle || 'A'),
 					)
 
 					this.log('info', `Looking up session clip ${readableId}`)
@@ -1015,7 +1015,7 @@ class DC extends InstanceBase<Config, undefined> {
 						String(event.options.page || 1),
 						String(event.options.bank || 1),
 						String(event.options.slot || 1),
-						String(event.options.angle || 'A')
+						String(event.options.angle || 'A'),
 					)
 
 					this.log('info', `Looking up clip ${readableId}`)
@@ -1048,7 +1048,7 @@ class DC extends InstanceBase<Config, undefined> {
 						String(event.options.page || 1),
 						String(event.options.bank || 1),
 						String(event.options.slot || 1),
-						String(event.options.angle || 'A')
+						String(event.options.angle || 'A'),
 					)
 
 					this.log('info', `Looking up clip ${readableId}`)
