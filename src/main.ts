@@ -1,14 +1,13 @@
 import * as https from 'node:https'
-
 import {
+	combineRgb,
 	InstanceBase,
 	InstanceStatus,
 	runEntrypoint,
 	TCPHelper,
-	type SomeCompanionConfigField,
 	type CompanionActionDefinitions,
 	type CompanionPresetDefinitions,
-	combineRgb,
+	type SomeCompanionConfigField,
 } from '@companion-module/base'
 
 interface Config {
@@ -240,7 +239,6 @@ class DC extends InstanceBase<Config, undefined> {
 			this.handleSessionPbsClipLookup(id, msg.result)
 		}
 
-
 		if (method === 'find_clips_hotkey') {
 			this.handleHotkeyClipLookup(id, msg.result)
 		}
@@ -333,7 +331,6 @@ class DC extends InstanceBase<Config, undefined> {
 			this.refreshDefinitions()
 		}
 
-
 		if (method === 'create_clip' && Array.isArray(msg.result)) {
 			const clip = msg.result[0]
 
@@ -356,7 +353,6 @@ class DC extends InstanceBase<Config, undefined> {
 
 		this.log('info', `Selected clip set to ${clipName} / ${clipId}`)
 	}
-
 
 	private handleHotkeyClipLookup(requestId: number, result: any): void {
 		const request = this.pendingHotkeys.get(requestId)
@@ -421,7 +417,6 @@ class DC extends InstanceBase<Config, undefined> {
 		this.pendingTags.delete(requestId)
 	}
 
-
 	private refreshDefinitions(): void {
 		this.setActionDefinitions(this.getActions())
 		this.setPresetDefinitions(this.getPresets())
@@ -479,7 +474,10 @@ class DC extends InstanceBase<Config, undefined> {
 		return this.playlists.find((playlist) => playlist.number === wanted || playlist.readableId === wanted)
 	}
 
-	private resolvePlaylistIdentifier(dropdownPlaylistId: string, readableId: string): { playlist_id?: string; readable_id?: string } | null {
+	private resolvePlaylistIdentifier(
+		dropdownPlaylistId: string,
+		readableId: string,
+	): { playlist_id?: string; readable_id?: string } | null {
 		const manualReadableId = readableId.trim()
 		if (manualReadableId) return { readable_id: manualReadableId }
 
@@ -563,7 +561,6 @@ class DC extends InstanceBase<Config, undefined> {
 		return this.playlists[0]?.id || ''
 	}
 
-
 	private sessionChoices() {
 		if (this.sessions.length === 0) {
 			return [{ id: '', label: 'No sessions discovered - run Refresh Sessions' }]
@@ -587,9 +584,6 @@ class DC extends InstanceBase<Config, undefined> {
 	private defaultSessionClipId(): string {
 		return this.sessionClips[0]?.id || ''
 	}
-
-
-
 
 	private refreshSessionClips(sessionId: string): void {
 		if (!sessionId) {
@@ -637,7 +631,6 @@ class DC extends InstanceBase<Config, undefined> {
 			this.refreshDefinitions()
 		})
 	}
-
 
 	private outputChoices() {
 		if (this.outputs.length === 0) {
@@ -712,7 +705,14 @@ class DC extends InstanceBase<Config, undefined> {
 		this.pendingSessionPbs.delete(requestId)
 	}
 
-	private requestSessionPbsClipLookup(sessionId: string, readableId: string, outputIds: string[], mask: number | null, speed: number, playAfterCue: boolean): void {
+	private requestSessionPbsClipLookup(
+		sessionId: string,
+		readableId: string,
+		outputIds: string[],
+		mask: number | null,
+		speed: number,
+		playAfterCue: boolean,
+	): void {
 		const id = this.requestId++
 
 		const msg: any = {
@@ -741,8 +741,13 @@ class DC extends InstanceBase<Config, undefined> {
 		this.tcp?.send(payload)
 	}
 
-
-	private requestClipHotkeyLookup(readableId: string, outputIds: string[], mask: number | null, speed: number, playAfterCue: boolean): void {
+	private requestClipHotkeyLookup(
+		readableId: string,
+		outputIds: string[],
+		mask: number | null,
+		speed: number,
+		playAfterCue: boolean,
+	): void {
 		const id = this.requestId++
 
 		const msg: any = {
@@ -799,7 +804,6 @@ class DC extends InstanceBase<Config, undefined> {
 		this.tcp.send(payload)
 	}
 
-
 	private getActions(): CompanionActionDefinitions {
 		return {
 			refresh_outputs: {
@@ -807,7 +811,6 @@ class DC extends InstanceBase<Config, undefined> {
 				options: [],
 				callback: async () => this.refreshOutputs(),
 			},
-
 
 			refresh_inputs: {
 				name: 'Refresh Inputs',
@@ -830,7 +833,13 @@ class DC extends InstanceBase<Config, undefined> {
 			refresh_connection: {
 				name: 'Refresh Connection',
 				options: [
-					{ type: 'dropdown', id: 'session', label: 'Session for Clip Names', choices: this.sessionChoices(), default: this.defaultSessionId() },
+					{
+						type: 'dropdown',
+						id: 'session',
+						label: 'Session for Clip Names',
+						choices: this.sessionChoices(),
+						default: this.defaultSessionId(),
+					},
 				],
 				callback: async (event) => {
 					this.refreshConnection(String(event.options.session || ''))
@@ -840,8 +849,20 @@ class DC extends InstanceBase<Config, undefined> {
 			route_input_to_output: {
 				name: 'Route Input to Output',
 				options: [
-					{ type: 'dropdown', id: 'input', label: 'Input', choices: this.inputChoices(), default: this.defaultInputId() },
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'input',
+						label: 'Input',
+						choices: this.inputChoices(),
+						default: this.defaultInputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 				],
 				callback: async (event) => {
 					const inputId = String(event.options.input || '')
@@ -863,7 +884,13 @@ class DC extends InstanceBase<Config, undefined> {
 			refresh_session_clips: {
 				name: 'Refresh Session Clips',
 				options: [
-					{ type: 'dropdown', id: 'session', label: 'Session', choices: this.sessionChoices(), default: this.defaultSessionId() },
+					{
+						type: 'dropdown',
+						id: 'session',
+						label: 'Session',
+						choices: this.sessionChoices(),
+						default: this.defaultSessionId(),
+					},
 				],
 				callback: async (event) => {
 					this.refreshSessionClips(String(event.options.session || ''))
@@ -873,8 +900,20 @@ class DC extends InstanceBase<Config, undefined> {
 			cue_session_clip_by_pbs: {
 				name: 'Cue Session Clip by PBS',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
-					{ type: 'dropdown', id: 'session', label: 'Session', choices: this.sessionChoices(), default: this.defaultSessionId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'session',
+						label: 'Session',
+						choices: this.sessionChoices(),
+						default: this.defaultSessionId(),
+					},
 					{ type: 'number', id: 'page', label: 'Page', default: 1, min: 0, max: 999 },
 					{ type: 'number', id: 'bank', label: 'Bank', default: 1, min: 0, max: 999 },
 					{ type: 'number', id: 'slot', label: 'Slot', default: 1, min: 0, max: 999 },
@@ -893,19 +932,38 @@ class DC extends InstanceBase<Config, undefined> {
 						String(event.options.page || 1),
 						String(event.options.bank || 1),
 						String(event.options.slot || 1),
-						String(event.options.angle || 'A')
+						String(event.options.angle || 'A'),
 					)
 
 					this.log('info', `Looking up session clip ${readableId}`)
-					this.requestSessionPbsClipLookup(sessionId, readableId, outputIds, mask, Number(event.options.speed || 0), false)
+					this.requestSessionPbsClipLookup(
+						sessionId,
+						readableId,
+						outputIds,
+						mask,
+						Number(event.options.speed || 0),
+						false,
+					)
 				},
 			},
 
 			play_session_clip_by_pbs: {
 				name: 'Play Session Clip by PBS',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
-					{ type: 'dropdown', id: 'session', label: 'Session', choices: this.sessionChoices(), default: this.defaultSessionId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'session',
+						label: 'Session',
+						choices: this.sessionChoices(),
+						default: this.defaultSessionId(),
+					},
 					{ type: 'number', id: 'page', label: 'Page', default: 1, min: 0, max: 999 },
 					{ type: 'number', id: 'bank', label: 'Bank', default: 1, min: 0, max: 999 },
 					{ type: 'number', id: 'slot', label: 'Slot', default: 1, min: 0, max: 999 },
@@ -923,7 +981,7 @@ class DC extends InstanceBase<Config, undefined> {
 						String(event.options.page || 1),
 						String(event.options.bank || 1),
 						String(event.options.slot || 1),
-						String(event.options.angle || 'A')
+						String(event.options.angle || 'A'),
 					)
 
 					this.log('info', `Looking up session clip ${readableId}`)
@@ -931,10 +989,16 @@ class DC extends InstanceBase<Config, undefined> {
 				},
 			},
 
-cue_clip_by_page_bank_slot_angle: {
+			cue_clip_by_page_bank_slot_angle: {
 				name: 'Cue Clip by Page / Bank / Slot / Angle',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 					{ type: 'number', id: 'page', label: 'Page', default: 1, min: 0, max: 999 },
 					{ type: 'number', id: 'bank', label: 'Bank', default: 1, min: 0, max: 999 },
 					{ type: 'number', id: 'slot', label: 'Slot', default: 1, min: 0, max: 999 },
@@ -951,7 +1015,7 @@ cue_clip_by_page_bank_slot_angle: {
 						String(event.options.page || 1),
 						String(event.options.bank || 1),
 						String(event.options.slot || 1),
-						String(event.options.angle || 'A')
+						String(event.options.angle || 'A'),
 					)
 
 					this.log('info', `Looking up clip ${readableId}`)
@@ -962,7 +1026,13 @@ cue_clip_by_page_bank_slot_angle: {
 			play_clip_by_page_bank_slot_angle: {
 				name: 'Play Clip by Page / Bank / Slot / Angle',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 					{ type: 'number', id: 'page', label: 'Page', default: 1, min: 0, max: 999 },
 					{ type: 'number', id: 'bank', label: 'Bank', default: 1, min: 0, max: 999 },
 					{ type: 'number', id: 'slot', label: 'Slot', default: 1, min: 0, max: 999 },
@@ -978,7 +1048,7 @@ cue_clip_by_page_bank_slot_angle: {
 						String(event.options.page || 1),
 						String(event.options.bank || 1),
 						String(event.options.slot || 1),
-						String(event.options.angle || 'A')
+						String(event.options.angle || 'A'),
 					)
 
 					this.log('info', `Looking up clip ${readableId}`)
@@ -986,10 +1056,16 @@ cue_clip_by_page_bank_slot_angle: {
 				},
 			},
 
-play: {
+			play: {
 				name: 'Play',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 					{ type: 'number', id: 'speed', label: 'Speed', default: 100, min: -400, max: 400 },
 				],
 				callback: async (event) => {
@@ -1003,7 +1079,13 @@ play: {
 			pause: {
 				name: 'Pause',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 				],
 				callback: async (event) => {
 					const mask = this.getSelectedMask(String(event.options.output || ''))
@@ -1016,7 +1098,13 @@ play: {
 			scrub: {
 				name: 'Scrub',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 					{ type: 'number', id: 'frames', label: 'Frames', default: 30, min: -9999, max: 9999 },
 				],
 				callback: async (event) => {
@@ -1030,7 +1118,13 @@ play: {
 			goto_live: {
 				name: 'Goto Live',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 				],
 				callback: async (event) => {
 					const mask = this.getSelectedMask(String(event.options.output || ''))
@@ -1043,7 +1137,13 @@ play: {
 			goto_in: {
 				name: 'Goto In',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 				],
 				callback: async (event) => {
 					const mask = this.getSelectedMask(String(event.options.output || ''))
@@ -1056,7 +1156,13 @@ play: {
 			goto_out: {
 				name: 'Goto Out',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 				],
 				callback: async (event) => {
 					const mask = this.getSelectedMask(String(event.options.output || ''))
@@ -1066,11 +1172,16 @@ play: {
 				},
 			},
 
-
 			mark_in: {
 				name: 'Mark In',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputChoices(),
+						default: this.defaultOutputId(),
+					},
 				],
 				callback: async (event) => {
 					const mask = this.getSelectedMask(String(event.options.output || ''))
@@ -1084,7 +1195,13 @@ play: {
 			mark_out: {
 				name: 'Mark Out',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputChoices(),
+						default: this.defaultOutputId(),
+					},
 				],
 				callback: async (event) => {
 					const mask = this.getSelectedMask(String(event.options.output || ''))
@@ -1098,8 +1215,20 @@ play: {
 			create_clip: {
 				name: 'Create Clip',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
-					{ type: 'dropdown', id: 'name', label: 'Clip Name Template', default: '%C_%L_%i_%o', choices: this.clipNameTemplateChoices() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'name',
+						label: 'Clip Name Template',
+						default: '%C_%L_%i_%o',
+						choices: this.clipNameTemplateChoices(),
+					},
 					{ type: 'textinput', id: 'readable_id', label: 'Readable ID Optional', default: '' },
 				],
 				callback: async (event) => {
@@ -1120,7 +1249,13 @@ play: {
 			recall_last_clip: {
 				name: 'Recall Last Clip',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 					{ type: 'number', id: 'speed', label: 'Cue Speed', default: 0, min: -400, max: 400 },
 				],
 				callback: async (event) => {
@@ -1128,14 +1263,24 @@ play: {
 					const outputIds = this.getSelectedOutputIds(String(event.options.output || ''))
 					if (outputIds.length === 0) return this.log('warn', 'No output selected/discovered')
 					this.setSelectedClip(this.lastClipId, this.lastClipName || 'Last Clip')
-					this.send('cue_clip', { clip_id: this.lastClipId, outputs: outputIds, speed: Number(event.options.speed || 0) })
+					this.send('cue_clip', {
+						clip_id: this.lastClipId,
+						outputs: outputIds,
+						speed: Number(event.options.speed || 0),
+					})
 				},
 			},
 
 			set_output_idle: {
 				name: 'Set Output Idle / Black',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 				],
 				callback: async (event) => {
 					const outputIds = this.getSelectedOutputIds(String(event.options.output || ''))
@@ -1180,11 +1325,16 @@ play: {
 				callback: async () => this.send('reboot_server', {}),
 			},
 
-
 			set_mosaic_custom_layout: {
 				name: 'Set Custom Mosaic Layout',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 					{
 						type: 'dropdown',
 						id: 'box_count',
@@ -1199,7 +1349,13 @@ play: {
 					{ type: 'number', id: 'border_thickness', label: 'Border Thickness', default: 0, min: 0, max: 64 },
 					{ type: 'textinput', id: 'border_colour', label: 'Border Colour', default: '#000000' },
 
-					{ type: 'dropdown', id: 'box1_id', label: 'Box 1 Input', choices: this.inputChoices(), default: this.defaultInputId() },
+					{
+						type: 'dropdown',
+						id: 'box1_id',
+						label: 'Box 1 Input',
+						choices: this.inputChoices(),
+						default: this.defaultInputId(),
+					},
 					{ type: 'number', id: 'box1_region_x', label: 'Box 1 Region X', default: 0, min: 0, max: 1 },
 					{ type: 'number', id: 'box1_region_y', label: 'Box 1 Region Y', default: 0, min: 0, max: 1 },
 					{ type: 'number', id: 'box1_region_w', label: 'Box 1 Region Width', default: 1, min: 0, max: 1 },
@@ -1209,7 +1365,13 @@ play: {
 					{ type: 'number', id: 'box1_location_w', label: 'Box 1 Location Width', default: 0.5, min: 0, max: 1 },
 					{ type: 'number', id: 'box1_location_h', label: 'Box 1 Location Height', default: 0.5, min: 0, max: 1 },
 
-					{ type: 'dropdown', id: 'box2_id', label: 'Box 2 Input', choices: this.inputChoices(), default: this.defaultInputId() },
+					{
+						type: 'dropdown',
+						id: 'box2_id',
+						label: 'Box 2 Input',
+						choices: this.inputChoices(),
+						default: this.defaultInputId(),
+					},
 					{ type: 'number', id: 'box2_region_x', label: 'Box 2 Region X', default: 0, min: 0, max: 1 },
 					{ type: 'number', id: 'box2_region_y', label: 'Box 2 Region Y', default: 0, min: 0, max: 1 },
 					{ type: 'number', id: 'box2_region_w', label: 'Box 2 Region Width', default: 1, min: 0, max: 1 },
@@ -1219,7 +1381,13 @@ play: {
 					{ type: 'number', id: 'box2_location_w', label: 'Box 2 Location Width', default: 0.5, min: 0, max: 1 },
 					{ type: 'number', id: 'box2_location_h', label: 'Box 2 Location Height', default: 0.5, min: 0, max: 1 },
 
-					{ type: 'dropdown', id: 'box3_id', label: 'Box 3 Input', choices: this.inputChoices(), default: this.defaultInputId() },
+					{
+						type: 'dropdown',
+						id: 'box3_id',
+						label: 'Box 3 Input',
+						choices: this.inputChoices(),
+						default: this.defaultInputId(),
+					},
 					{ type: 'number', id: 'box3_region_x', label: 'Box 3 Region X', default: 0, min: 0, max: 1 },
 					{ type: 'number', id: 'box3_region_y', label: 'Box 3 Region Y', default: 0, min: 0, max: 1 },
 					{ type: 'number', id: 'box3_region_w', label: 'Box 3 Region Width', default: 1, min: 0, max: 1 },
@@ -1229,7 +1397,13 @@ play: {
 					{ type: 'number', id: 'box3_location_w', label: 'Box 3 Location Width', default: 0.5, min: 0, max: 1 },
 					{ type: 'number', id: 'box3_location_h', label: 'Box 3 Location Height', default: 0.5, min: 0, max: 1 },
 
-					{ type: 'dropdown', id: 'box4_id', label: 'Box 4 Input', choices: this.inputChoices(), default: this.defaultInputId() },
+					{
+						type: 'dropdown',
+						id: 'box4_id',
+						label: 'Box 4 Input',
+						choices: this.inputChoices(),
+						default: this.defaultInputId(),
+					},
 					{ type: 'number', id: 'box4_region_x', label: 'Box 4 Region X', default: 0, min: 0, max: 1 },
 					{ type: 'number', id: 'box4_region_y', label: 'Box 4 Region Y', default: 0, min: 0, max: 1 },
 					{ type: 'number', id: 'box4_region_w', label: 'Box 4 Region Width', default: 1, min: 0, max: 1 },
@@ -1289,7 +1463,13 @@ play: {
 			clear_mosaic_layout: {
 				name: 'Clear Mosaic Layout',
 				options: [
-					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputComboChoices(), default: this.defaultOutputId() },
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
 				],
 				callback: async (event) => {
 					const mask = this.getSelectedMask(String(event.options.output || ''))
@@ -1300,9 +1480,7 @@ play: {
 				},
 			},
 
-
-
-start_capture: {
+			start_capture: {
 				name: 'Start Capture',
 				options: [],
 				callback: async () => {
@@ -1317,7 +1495,6 @@ start_capture: {
 					this.send('stop_capture', {})
 				},
 			},
-
 
 			raw_jsonrpc: {
 				name: 'Raw JSON-RPC',
@@ -1356,7 +1533,17 @@ start_capture: {
 				category: 'System Restart',
 				name: 'Restart Inputs, Outputs, AMP, and VUE',
 				style: { text: 'RESTART\nALL', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(160, 0, 0) },
-				steps: [{ down: [{ actionId: 'restart_components', options: { inputs: true, outputs: true, amps: true, vue: true, confirm: true } }], up: [] }],
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'restart_components',
+								options: { inputs: true, outputs: true, amps: true, vue: true, confirm: true },
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1373,8 +1560,23 @@ start_capture: {
 				type: 'button',
 				category: 'System Restart',
 				name: 'Restart Inputs',
-				style: { text: 'RESTART\nINPUTS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(130, 70, 0) },
-				steps: [{ down: [{ actionId: 'restart_components', options: { inputs: true, outputs: false, amps: false, vue: false, confirm: true } }], up: [] }],
+				style: {
+					text: 'RESTART\nINPUTS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(130, 70, 0),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'restart_components',
+								options: { inputs: true, outputs: false, amps: false, vue: false, confirm: true },
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1382,8 +1584,23 @@ start_capture: {
 				type: 'button',
 				category: 'System Restart',
 				name: 'Restart Outputs',
-				style: { text: 'RESTART\nOUTPUTS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(130, 70, 0) },
-				steps: [{ down: [{ actionId: 'restart_components', options: { inputs: false, outputs: true, amps: false, vue: false, confirm: true } }], up: [] }],
+				style: {
+					text: 'RESTART\nOUTPUTS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(130, 70, 0),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'restart_components',
+								options: { inputs: false, outputs: true, amps: false, vue: false, confirm: true },
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1392,7 +1609,17 @@ start_capture: {
 				category: 'System Restart',
 				name: 'Restart AMP Connections',
 				style: { text: 'RESTART\nAMP', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(130, 70, 0) },
-				steps: [{ down: [{ actionId: 'restart_components', options: { inputs: false, outputs: false, amps: true, vue: false, confirm: true } }], up: [] }],
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'restart_components',
+								options: { inputs: false, outputs: false, amps: true, vue: false, confirm: true },
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1401,7 +1628,17 @@ start_capture: {
 				category: 'System Restart',
 				name: 'Restart VUE',
 				style: { text: 'RESTART\nVUE', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(130, 70, 0) },
-				steps: [{ down: [{ actionId: 'restart_components', options: { inputs: false, outputs: false, amps: false, vue: true, confirm: true } }], up: [] }],
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'restart_components',
+								options: { inputs: false, outputs: false, amps: false, vue: true, confirm: true },
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1409,7 +1646,12 @@ start_capture: {
 				type: 'button',
 				category: 'System',
 				name: 'Refresh Outputs',
-				style: { text: 'REFRESH\nOUTPUTS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(50, 50, 50) },
+				style: {
+					text: 'REFRESH\nOUTPUTS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(50, 50, 50),
+				},
 				steps: [{ down: [{ actionId: 'refresh_outputs', options: {} }], up: [] }],
 				feedbacks: [],
 			},
@@ -1418,7 +1660,12 @@ start_capture: {
 				type: 'button',
 				category: 'System',
 				name: 'Refresh Inputs',
-				style: { text: 'REFRESH\nINPUTS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(50, 50, 50) },
+				style: {
+					text: 'REFRESH\nINPUTS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(50, 50, 50),
+				},
 				steps: [{ down: [{ actionId: 'refresh_inputs', options: {} }], up: [] }],
 				feedbacks: [],
 			},
@@ -1436,12 +1683,17 @@ start_capture: {
 				type: 'button',
 				category: 'System',
 				name: 'Refresh Export Profiles',
-				style: { text: 'REFRESH\nEXPORTS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(50, 50, 50) },
+				style: {
+					text: 'REFRESH\nEXPORTS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(50, 50, 50),
+				},
 				steps: [{ down: [{ actionId: 'refresh_export_profiles', options: {} }], up: [] }],
 				feedbacks: [],
 			},
 
-start_capture: {
+			start_capture: {
 				type: 'button',
 				category: 'Capture Control',
 				name: 'Start Capture',
@@ -1463,7 +1715,12 @@ start_capture: {
 				type: 'button',
 				category: 'System',
 				name: 'Refresh Connection',
-				style: { text: 'REFRESH\nCONNECTION', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(30, 70, 130) },
+				style: {
+					text: 'REFRESH\nCONNECTION',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(30, 70, 130),
+				},
 				steps: [{ down: [{ actionId: 'refresh_connection', options: { session: this.defaultSessionId() } }], up: [] }],
 				feedbacks: [],
 			},
@@ -1531,7 +1788,6 @@ start_capture: {
 				feedbacks: [],
 			},
 
-
 			mark_in: {
 				type: 'button',
 				category: 'Clip Workflow',
@@ -1555,7 +1811,12 @@ start_capture: {
 				category: 'Clip Workflow',
 				name: 'Create Clip',
 				style: { text: 'CREATE\nCLIP', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(140, 0, 140) },
-				steps: [{ down: [{ actionId: 'create_clip', options: { output: out1, name: '%C_%L_%i_%o', readable_id: '' } }], up: [] }],
+				steps: [
+					{
+						down: [{ actionId: 'create_clip', options: { output: out1, name: '%C_%L_%i_%o', readable_id: '' } }],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1572,7 +1833,12 @@ start_capture: {
 				type: 'button',
 				category: 'System',
 				name: 'Refresh Sessions',
-				style: { text: 'REFRESH\nSESSIONS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(50, 50, 50) },
+				style: {
+					text: 'REFRESH\nSESSIONS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(50, 50, 50),
+				},
 				steps: [{ down: [{ actionId: 'refresh_sessions', options: {} }], up: [] }],
 				feedbacks: [],
 			},
@@ -1581,8 +1847,15 @@ start_capture: {
 				type: 'button',
 				category: 'System',
 				name: 'Refresh Session Clips',
-				style: { text: 'REFRESH\nSESSION CLIPS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(50, 50, 50) },
-				steps: [{ down: [{ actionId: 'refresh_session_clips', options: { session: this.defaultSessionId() } }], up: [] }],
+				style: {
+					text: 'REFRESH\nSESSION CLIPS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(50, 50, 50),
+				},
+				steps: [
+					{ down: [{ actionId: 'refresh_session_clips', options: { session: this.defaultSessionId() } }], up: [] },
+				],
 				feedbacks: [],
 			},
 
@@ -1590,8 +1863,31 @@ start_capture: {
 				type: 'button',
 				category: 'Clip Hotkeys',
 				name: 'Cue Session Clip by PBS',
-				style: { text: 'CUE SESSION\nPBS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(45, 45, 120) },
-				steps: [{ down: [{ actionId: 'cue_session_clip_by_pbs', options: { output: out1, session: this.defaultSessionId(), page: 1, bank: 1, slot: 1, angle: 'A', speed: 0 } }], up: [] }],
+				style: {
+					text: 'CUE SESSION\nPBS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(45, 45, 120),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'cue_session_clip_by_pbs',
+								options: {
+									output: out1,
+									session: this.defaultSessionId(),
+									page: 1,
+									bank: 1,
+									slot: 1,
+									angle: 'A',
+									speed: 0,
+								},
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1599,17 +1895,47 @@ start_capture: {
 				type: 'button',
 				category: 'Clip Hotkeys',
 				name: 'Play Session Clip by PBS',
-				style: { text: 'PLAY SESSION\nPBS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 100, 70) },
-				steps: [{ down: [{ actionId: 'play_session_clip_by_pbs', options: { output: out1, session: this.defaultSessionId(), page: 1, bank: 1, slot: 1, angle: 'A' } }], up: [] }],
+				style: {
+					text: 'PLAY SESSION\nPBS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(0, 100, 70),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'play_session_clip_by_pbs',
+								options: { output: out1, session: this.defaultSessionId(), page: 1, bank: 1, slot: 1, angle: 'A' },
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
-cue_clip_hotkey_preset: {
+			cue_clip_hotkey_preset: {
 				type: 'button',
 				category: 'Clip Hotkeys',
 				name: 'Cue Clip by PBS',
-				style: { text: 'CUE\nCLIP NAME', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(45, 45, 120) },
-				steps: [{ down: [{ actionId: 'cue_clip_by_page_bank_slot_angle', options: { output: out1, page: 1, bank: 2, slot: 3, angle: 'A', speed: 0 } }], up: [] }],
+				style: {
+					text: 'CUE\nCLIP NAME',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(45, 45, 120),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'cue_clip_by_page_bank_slot_angle',
+								options: { output: out1, page: 1, bank: 2, slot: 3, angle: 'A', speed: 0 },
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1617,45 +1943,89 @@ cue_clip_hotkey_preset: {
 				type: 'button',
 				category: 'Clip Hotkeys',
 				name: 'Play Clip by PBS',
-				style: { text: 'PLAY\nCLIP NAME', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 100, 70) },
-				steps: [{ down: [{ actionId: 'play_clip_by_page_bank_slot_angle', options: { output: out1, page: 1, bank: 2, slot: 3, angle: 'A' } }], up: [] }],
+				style: {
+					text: 'PLAY\nCLIP NAME',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(0, 100, 70),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'play_clip_by_page_bank_slot_angle',
+								options: { output: out1, page: 1, bank: 2, slot: 3, angle: 'A' },
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
-
-
 
 			route_input_out1: {
 				type: 'button',
 				category: 'Input Routing',
 				name: 'Route Input to Output 1',
-				style: { text: 'INPUT\nTO OUT 1', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 90, 120) },
-				steps: [{ down: [{ actionId: 'route_input_to_output', options: { input: this.defaultInputId(), output: out1 } }], up: [] }],
+				style: {
+					text: 'INPUT\nTO OUT 1',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(0, 90, 120),
+				},
+				steps: [
+					{
+						down: [{ actionId: 'route_input_to_output', options: { input: this.defaultInputId(), output: out1 } }],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
-
-
-
-
-
-
 
 			mosaic_custom_2box: {
 				type: 'button',
 				category: 'Mosaic',
 				name: 'Mosaic Custom 2 Box',
-				style: { text: 'MOSAIC\n2 BOX', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(60, 60, 130) },
-				steps: [{ down: [{ actionId: 'set_mosaic_custom_layout', options: {
-					output: out1,
-					box_count: '2',
-					border_thickness: 0,
-					border_colour: '#000000',
-					box1_id: this.defaultInputId(),
-					box1_region_x: 0, box1_region_y: 0, box1_region_w: 1, box1_region_h: 1,
-					box1_location_x: 0, box1_location_y: 0, box1_location_w: 0.5, box1_location_h: 1,
-					box2_id: this.defaultInputId(),
-					box2_region_x: 0, box2_region_y: 0, box2_region_w: 1, box2_region_h: 1,
-					box2_location_x: 0.5, box2_location_y: 0, box2_location_w: 0.5, box2_location_h: 1,
-				} }], up: [] }],
+				style: {
+					text: 'MOSAIC\n2 BOX',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(60, 60, 130),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'set_mosaic_custom_layout',
+								options: {
+									output: out1,
+									box_count: '2',
+									border_thickness: 0,
+									border_colour: '#000000',
+									box1_id: this.defaultInputId(),
+									box1_region_x: 0,
+									box1_region_y: 0,
+									box1_region_w: 1,
+									box1_region_h: 1,
+									box1_location_x: 0,
+									box1_location_y: 0,
+									box1_location_w: 0.5,
+									box1_location_h: 1,
+									box2_id: this.defaultInputId(),
+									box2_region_x: 0,
+									box2_region_y: 0,
+									box2_region_w: 1,
+									box2_region_h: 1,
+									box2_location_x: 0.5,
+									box2_location_y: 0,
+									box2_location_w: 0.5,
+									box2_location_h: 1,
+								},
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1663,22 +2033,55 @@ cue_clip_hotkey_preset: {
 				type: 'button',
 				category: 'Mosaic',
 				name: 'Mosaic Custom 3 Box',
-				style: { text: 'MOSAIC\n3 BOX', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(60, 60, 130) },
-				steps: [{ down: [{ actionId: 'set_mosaic_custom_layout', options: {
-					output: out1,
-					box_count: '3',
-					border_thickness: 0,
-					border_colour: '#000000',
-					box1_id: this.defaultInputId(),
-					box1_region_x: 0, box1_region_y: 0, box1_region_w: 1, box1_region_h: 1,
-					box1_location_x: 0, box1_location_y: 0, box1_location_w: 0.3333, box1_location_h: 1,
-					box2_id: this.defaultInputId(),
-					box2_region_x: 0, box2_region_y: 0, box2_region_w: 1, box2_region_h: 1,
-					box2_location_x: 0.3333, box2_location_y: 0, box2_location_w: 0.3333, box2_location_h: 1,
-					box3_id: this.defaultInputId(),
-					box3_region_x: 0, box3_region_y: 0, box3_region_w: 1, box3_region_h: 1,
-					box3_location_x: 0.6666, box3_location_y: 0, box3_location_w: 0.3333, box3_location_h: 1,
-				} }], up: [] }],
+				style: {
+					text: 'MOSAIC\n3 BOX',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(60, 60, 130),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'set_mosaic_custom_layout',
+								options: {
+									output: out1,
+									box_count: '3',
+									border_thickness: 0,
+									border_colour: '#000000',
+									box1_id: this.defaultInputId(),
+									box1_region_x: 0,
+									box1_region_y: 0,
+									box1_region_w: 1,
+									box1_region_h: 1,
+									box1_location_x: 0,
+									box1_location_y: 0,
+									box1_location_w: 0.3333,
+									box1_location_h: 1,
+									box2_id: this.defaultInputId(),
+									box2_region_x: 0,
+									box2_region_y: 0,
+									box2_region_w: 1,
+									box2_region_h: 1,
+									box2_location_x: 0.3333,
+									box2_location_y: 0,
+									box2_location_w: 0.3333,
+									box2_location_h: 1,
+									box3_id: this.defaultInputId(),
+									box3_region_x: 0,
+									box3_region_y: 0,
+									box3_region_w: 1,
+									box3_region_h: 1,
+									box3_location_x: 0.6666,
+									box3_location_y: 0,
+									box3_location_w: 0.3333,
+									box3_location_h: 1,
+								},
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1686,25 +2089,64 @@ cue_clip_hotkey_preset: {
 				type: 'button',
 				category: 'Mosaic',
 				name: 'Mosaic Custom 4 Box',
-				style: { text: 'MOSAIC\n4 BOX', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(60, 60, 130) },
-				steps: [{ down: [{ actionId: 'set_mosaic_custom_layout', options: {
-					output: out1,
-					box_count: '4',
-					border_thickness: 0,
-					border_colour: '#000000',
-					box1_id: this.defaultInputId(),
-					box1_region_x: 0, box1_region_y: 0, box1_region_w: 1, box1_region_h: 1,
-					box1_location_x: 0, box1_location_y: 0, box1_location_w: 0.5, box1_location_h: 0.5,
-					box2_id: this.defaultInputId(),
-					box2_region_x: 0, box2_region_y: 0, box2_region_w: 1, box2_region_h: 1,
-					box2_location_x: 0.5, box2_location_y: 0, box2_location_w: 0.5, box2_location_h: 0.5,
-					box3_id: this.defaultInputId(),
-					box3_region_x: 0, box3_region_y: 0, box3_region_w: 1, box3_region_h: 1,
-					box3_location_x: 0, box3_location_y: 0.5, box3_location_w: 0.5, box3_location_h: 0.5,
-					box4_id: this.defaultInputId(),
-					box4_region_x: 0, box4_region_y: 0, box4_region_w: 1, box4_region_h: 1,
-					box4_location_x: 0.5, box4_location_y: 0.5, box4_location_w: 0.5, box4_location_h: 0.5,
-				} }], up: [] }],
+				style: {
+					text: 'MOSAIC\n4 BOX',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(60, 60, 130),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'set_mosaic_custom_layout',
+								options: {
+									output: out1,
+									box_count: '4',
+									border_thickness: 0,
+									border_colour: '#000000',
+									box1_id: this.defaultInputId(),
+									box1_region_x: 0,
+									box1_region_y: 0,
+									box1_region_w: 1,
+									box1_region_h: 1,
+									box1_location_x: 0,
+									box1_location_y: 0,
+									box1_location_w: 0.5,
+									box1_location_h: 0.5,
+									box2_id: this.defaultInputId(),
+									box2_region_x: 0,
+									box2_region_y: 0,
+									box2_region_w: 1,
+									box2_region_h: 1,
+									box2_location_x: 0.5,
+									box2_location_y: 0,
+									box2_location_w: 0.5,
+									box2_location_h: 0.5,
+									box3_id: this.defaultInputId(),
+									box3_region_x: 0,
+									box3_region_y: 0,
+									box3_region_w: 1,
+									box3_region_h: 1,
+									box3_location_x: 0,
+									box3_location_y: 0.5,
+									box3_location_w: 0.5,
+									box3_location_h: 0.5,
+									box4_id: this.defaultInputId(),
+									box4_region_x: 0,
+									box4_region_y: 0,
+									box4_region_w: 1,
+									box4_region_h: 1,
+									box4_location_x: 0.5,
+									box4_location_y: 0.5,
+									box4_location_w: 0.5,
+									box4_location_h: 0.5,
+								},
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1739,7 +2181,12 @@ cue_clip_hotkey_preset: {
 				type: 'button',
 				category: 'Multi-Output',
 				name: 'Black First Two Outputs',
-				style: { text: 'BLACK\nOUT 1+2', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(20, 20, 20) },
+				style: {
+					text: 'BLACK\nOUT 1+2',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(20, 20, 20),
+				},
 				steps: [{ down: [{ actionId: 'set_output_idle', options: { output: firstTwo } }], up: [] }],
 				feedbacks: [],
 			},
@@ -1774,7 +2221,6 @@ cue_clip_hotkey_preset: {
 	private refreshExportProfiles(): void {
 		this.send('get_export_profiles', null)
 	}
-
 
 	private httpJsonRpc(method: string, params: any | null, callback: (result: any) => void): void {
 		let url = `https://${this.configData.host}/api/jsonrpc?method=${encodeURIComponent(method)}`
@@ -1812,9 +2258,6 @@ cue_clip_hotkey_preset: {
 			})
 	}
 
-
-
-
 	private refreshConnection(sessionId?: string): void {
 		this.refreshOutputs()
 		this.refreshInputs()
@@ -1831,7 +2274,6 @@ cue_clip_hotkey_preset: {
 			}
 		})
 	}
-
 
 	private refreshSessions(afterRefresh?: () => void): void {
 		this.httpJsonRpc('get_sessions', null, (result) => {
