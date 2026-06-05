@@ -1,23 +1,24 @@
 {
-"name": "companion-module-evertz-dreamcatcher",
-"version": "1.0.4",
-"description": "Evertz DreamCatcher Companion module",
-"license": "MIT",
-"main": "dist/main.js",
-"scripts": {
-"build": "tsc"
-},
-"files": [
-"dist",
-"companion",
-"README.md",
-"LICENSE"
-],
-"dependencies": {
-"@companion-module/base": "^1.12.0"
-},
-"devDependencies": {
-"@types/node": "^20.0.0",
-"typescript": "^5.4.0"
-}
+  "name": "companion-module-evertz-dreamcatcher",
+  "version": "1.0.5",
+  "description": "Evertz DreamCatcher Companion module",
+  "license": "MIT",
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "tsc",
+    "companion-module-build": "yarn build"
+  },
+  "files": [
+    "dist",
+    "companion",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@companion-module/base": "^1.12.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
 }
