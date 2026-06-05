@@ -1,11 +1,11 @@
 {
   "name": "companion-module-evertz-dreamcatcher",
-  "version": "1.0.1",
+  "version": "1.0.6",
   "description": "Evertz DreamCatcher Companion module",
   "license": "MIT",
   "main": "dist/main.js",
   "scripts": {
-    "build": "tsc",
+    "build": "node -e \"require('child_process').execSync('tsc', { stdio: 'inherit' })\"",
     "companion-module-build": "node -e \"require('child_process').execSync('tsc', { stdio: 'inherit' })\""
   },
   "files": [
