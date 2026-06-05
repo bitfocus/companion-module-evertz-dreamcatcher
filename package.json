@@ -5,8 +5,8 @@
   "license": "MIT",
   "main": "dist/main.js",
   "scripts": {
-    "build": "node -e \"require('child_process').execSync('tsc', { stdio: 'inherit' })\"",
-    "companion-module-build": "node -e \"require('child_process').execSync('tsc', { stdio: 'inherit' })\""
+    "build": "tsc",
+    "companion-module-build": "yarn build"
   },
   "files": [
     "dist",
