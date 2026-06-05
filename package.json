@@ -1,11 +1,11 @@
 {
   "name": "companion-module-evertz-dreamcatcher",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Evertz DreamCatcher Companion module",
   "license": "MIT",
   "main": "pkg/main.js",
   "scripts": {
-    "build": "tsc && mkdir -p pkg && cp -R dist/* pkg/ && cp -R companion pkg/ && cp README.md LICENSE pkg/",
+    "build": "sh -c 'tsc && mkdir -p pkg && cp -R dist/* pkg/ && cp -R companion pkg/ && cp README.md LICENSE pkg/' --",
     "companion-module-build": "yarn build"
   },
   "files": [
