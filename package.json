@@ -1,6 +1,6 @@
 {
 	"name": "companion-module-evertz-dreamcatcher",
-	"version": "1.1.4",
+	"version": "1.1.5",
 	"description": "Evertz DreamCatcher Companion module",
 	"license": "MIT",
 	"main": "dist/main.js",
