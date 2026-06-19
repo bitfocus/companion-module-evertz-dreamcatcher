@@ -6,6 +6,7 @@ import {
 	runEntrypoint,
 	TCPHelper,
 	type CompanionActionDefinitions,
+	type CompanionFeedbackDefinitions,
 	type CompanionPresetDefinitions,
 	type SomeCompanionConfigField,
 } from '@companion-module/base'
@@ -79,6 +80,19 @@ type SessionPbsLookup = {
 	playAfterCue: boolean
 }
 
+type OutputStatus = {
+	id: string
+	name: string
+	playmode: number // 0 = SCRUB/PAUSED, 1 = PLAYING (per API docs)
+	playspeed: number // speed percentage, 0-100
+	clip_time_remaining: string
+	playlist_time_remaining: string
+	playlist_id: string
+	timecode: string
+	date: string
+	clip_id: string
+}
+
 class DC extends InstanceBase<Config, undefined> {
 	private tcp?: TCPHelper
 	private requestId = 1
@@ -93,8 +107,20 @@ class DC extends InstanceBase<Config, undefined> {
 	private bins: BinInfo[] = []
 	private exportProfiles: ExportProfileInfo[] = []
 	private playlists: PlaylistInfo[] = []
+	private sessionPlaylists: PlaylistInfo[] = []
 	private sessions: SessionInfo[] = []
 	private sessionClips: SessionClipInfo[] = []
+	private allClips: { id: string; name: string }[] = []
+	private outputStatuses = new Map<string, OutputStatus>()
+	private clipNames = new Map<string, string>()
+	private clipReadableIds = new Map<string, string>()  // clip_id -> readable_id
+	private playlistNames = new Map<string, string>()
+	private statusPollInterval?: ReturnType<typeof setInterval>
+	private systemInfoPollInterval?: ReturnType<typeof setInterval>
+	private storageInfo: { timeRemainingSeconds?: number; raw?: any } = {}
+	private nasInfo: { mounts: { path: string; name: string; connected: boolean }[]; raw?: any } = { mounts: [] }
+	private lastPingMs: number | null = null
+	private lastPingTime: number = 0
 
 	private lastClipId = ''
 	private lastClipName = ''
@@ -112,26 +138,35 @@ class DC extends InstanceBase<Config, undefined> {
 		this.setConfig(config)
 		this.updateStatus(InstanceStatus.Connecting)
 		this.setActionDefinitions(this.getActions())
+		this.setFeedbackDefinitions(this.getFeedbacks())
 		this.setPresetDefinitions(this.getPresets())
 		this.connect()
 	}
 
 	public async destroy(): Promise<void> {
+		this.stopPlayspeedPolling()
+		this.stopSystemInfoPolling()
 		this.tcp?.destroy()
 		this.tcp = undefined
 	}
 
 	public async configUpdated(config: Config): Promise<void> {
 		this.setConfig(config)
+		this.stopPlayspeedPolling()
+		this.stopSystemInfoPolling()
 		this.tcp?.destroy()
 		this.outputs = []
 		this.inputs = []
 		this.bins = []
 		this.exportProfiles = []
 		this.playlists = []
+		this.sessionPlaylists = []
 		this.sessions = []
 		this.sessionClips = []
+		this.allClips = []
+		this.outputStatuses = new Map()
 		this.setActionDefinitions(this.getActions())
+		this.setFeedbackDefinitions(this.getFeedbacks())
 		this.setPresetDefinitions(this.getPresets())
 		this.connect()
 	}
@@ -187,7 +222,11 @@ class DC extends InstanceBase<Config, undefined> {
 				this.refreshOutputs()
 				this.refreshInputs()
 				this.refreshExportProfiles()
-				this.refreshPlaylists()
+				this.refreshAllPlaylists()
+				this.refreshAllClips()
+				this.send('subscribe_output_status', null)
+				this.startPlayspeedPolling()
+				this.startSystemInfoPolling()
 			}, 250)
 		})
 
@@ -217,6 +256,17 @@ class DC extends InstanceBase<Config, undefined> {
 	private handleResponse(msg: any): void {
 		const id = Number(msg.id)
 		const method = this.pending.get(id)
+
+		// DreamCatcher pushes output status as {"jsonrpc":"2.0","method":"output_status","params":{...}}
+		// params is a single object, not an array
+		if (msg.method === 'output_status' && msg.params && typeof msg.params === 'object') {
+			this.handleOutputStatusUpdate([msg.params])
+		}
+
+		// get_output_status polled response — result is an array of output status objects
+		if (method === 'get_output_status' && Array.isArray(msg.result)) {
+			this.handleOutputStatusUpdate(msg.result)
+		}
 
 		if (method === 'find_local_playlists' || method === 'find_playlists' || method === 'get_playlists') {
 			this.log('info', `Playlist response from ${method}: ${JSON.stringify(msg.result)}`)
@@ -371,6 +421,7 @@ class DC extends InstanceBase<Config, undefined> {
 		const clipName = String(clip.name || clip.dynamic_name || request.readableId)
 
 		this.log('info', `Found ${request.readableId}: ${clipName} / ${clipId}`)
+		this.clipNames.set(clipId, clipName)
 		this.setSelectedClip(clipId, clipName)
 
 		this.send('cue_clip', {
@@ -417,8 +468,154 @@ class DC extends InstanceBase<Config, undefined> {
 		this.pendingTags.delete(requestId)
 	}
 
+	private cleanTimeString(value: any): string {
+		return String(value ?? '').replace(/\u0000/g, '').trim()
+	}
+
+	private startPlayspeedPolling(): void {
+		this.stopPlayspeedPolling()
+		this.statusPollInterval = setInterval(() => {
+			this.send('get_output_status', null)
+		}, 500)
+	}
+
+	private stopPlayspeedPolling(): void {
+		if (this.statusPollInterval !== undefined) {
+			clearInterval(this.statusPollInterval)
+			this.statusPollInterval = undefined
+		}
+	}
+
+	private startSystemInfoPolling(): void {
+		this.stopSystemInfoPolling()
+		this.pollSystemInfo()
+		this.systemInfoPollInterval = setInterval(() => this.pollSystemInfo(), 5000)
+	}
+
+	private stopSystemInfoPolling(): void {
+		if (this.systemInfoPollInterval !== undefined) {
+			clearInterval(this.systemInfoPollInterval)
+			this.systemInfoPollInterval = undefined
+		}
+	}
+
+	private pollSystemInfo(): void {
+		// Ping — measure round trip of a lightweight call
+		const pingStart = Date.now()
+		this.lastPingTime = pingStart
+		this.httpJsonRpc('get_storage_info', null, (result) => {
+			const elapsed = Date.now() - pingStart
+			this.lastPingMs = elapsed
+
+			// Parse storage info — data is nested under result.storage
+			if (result && typeof result === 'object') {
+				const storage = result.storage ?? result
+				const timeRemaining = storage.real_time_remaining ?? storage.time_remaining ?? null
+				this.storageInfo = {
+					timeRemainingSeconds: timeRemaining !== null ? Number(timeRemaining) : undefined,
+					raw: storage,
+				}
+			}
+
+			this.checkFeedbacks('ping', 'storage_info', 'nas_info', 'timecode_display')
+		})
+
+		// NAS info — separate call
+		this.httpJsonRpc('nas_info', null, (result) => {
+			if (result && typeof result === 'object') {
+				const prevCount = this.nasInfo.mounts.length
+				this.nasInfo = {
+					mounts: Object.entries(result).map(([path, info]: [string, any]) => ({
+						path,
+						name: String(info.folder_name || path),
+						connected: Boolean(info.connected),
+					})),
+					raw: result,
+				}
+				// Rebuild feedback definitions if mounts changed so dropdown updates
+				if (prevCount !== this.nasInfo.mounts.length) {
+					this.refreshDefinitions()
+				}
+			}
+			this.checkFeedbacks('nas_info')
+		})
+
+		// Ping timeout — if ping hasn't returned in 2s, mark as failed
+		setTimeout(() => {
+			if (this.lastPingTime === pingStart && this.lastPingMs === null) {
+				this.lastPingMs = -1
+				this.checkFeedbacks('ping')
+			}
+		}, 2000)
+	}
+
+	private fetchClipName(clipId: string): void {
+		// Prevent duplicate in-flight fetches
+		this.clipNames.set(clipId, '?')
+
+		this.httpJsonRpc('get_clip', { clip_id: clipId }, (result) => {
+			if (!result) return
+			const name = String(result.name || result.dynamic_name || '')
+			if (name) {
+				this.clipNames.set(clipId, name)
+				this.checkFeedbacks('output_playing', 'output_playing_simple')
+				this.log('debug', `Fetched clip name: ${clipId} -> ${name}`)
+			}
+		})
+	}
+
+	private fetchPlaylistName(playlistId: string): void {
+		// Prevent duplicate in-flight fetches
+		this.playlistNames.set(playlistId, '?')
+
+		this.httpJsonRpc('find_local_playlists', { playlist_id: playlistId }, (result) => {
+			const playlists = this.extractArray(result)
+			const pl = playlists[0]
+			if (!pl) return
+
+			const name = String(pl.name || pl.readable_id || pl.readableId || '')
+			if (name) {
+				this.playlistNames.set(playlistId, name)
+				this.checkFeedbacks('output_playing', 'output_playing_simple')
+				this.log('debug', `Fetched playlist name: ${playlistId} -> ${name}`)
+			}
+		})
+	}
+
+	private handleOutputStatusUpdate(statuses: any[]): void {
+		let changed = false
+
+		for (const s of statuses) {
+			const outputId = String(s.id || '')
+			if (!outputId) continue
+
+			const existing = this.outputStatuses.get(outputId)
+			const updated: OutputStatus = {
+				id: outputId,
+				name: String(s.name || s.eng_name || existing?.name || ''),
+				playmode: Number(s.playmode ?? existing?.playmode ?? 0),
+				playspeed: Number(s.playspeed ?? existing?.playspeed ?? 0),
+				clip_time_remaining: this.cleanTimeString(s.clip_time_remaining ?? existing?.clip_time_remaining),
+				playlist_time_remaining: this.cleanTimeString(s.playlist_time_remaining ?? existing?.playlist_time_remaining),
+				// Use null check not || so empty string / null clears the value
+				playlist_id: s.playlist_id != null ? String(s.playlist_id) : '',
+				timecode: this.cleanTimeString(s.timecode ?? existing?.timecode),
+				date: String(s.date || existing?.date || ''),
+				clip_id: s.clip_id != null ? String(s.clip_id) : (existing?.clip_id ?? ''),
+			}
+
+			this.outputStatuses.set(outputId, updated)
+			changed = true
+		}
+
+		if (changed) {
+			this.checkFeedbacks('output_playing', 'output_playing_simple')
+		}
+	}
+
 	private refreshDefinitions(): void {
 		this.setActionDefinitions(this.getActions())
+		this.setFeedbackDefinitions(this.getFeedbacks())
 		this.setPresetDefinitions(this.getPresets())
 	}
 
@@ -444,7 +641,7 @@ class DC extends InstanceBase<Config, undefined> {
 	}
 
 	private normalizePlaylist(p: any): PlaylistInfo {
-		const id = String(p.playlist_id || p.package_id || p.id || p.uuid || '')
+		const id = String(p.package_id || p.playlist_id || p.id || p.uuid || '')
 		const name = String(p.name || p.label || p.title || p.readable_id || p.readableId || id)
 		const readableId = String(p.readable_id || p.readableId || p.number || '')
 		const number = this.parsePlaylistNumber(`${readableId} ${name}`)
@@ -551,10 +748,18 @@ class DC extends InstanceBase<Config, undefined> {
 
 	private playlistChoices() {
 		if (this.playlists.length === 0) {
-			return [{ id: '', label: 'No playlists discovered - run Refresh Playlists' }]
+			return [{ id: '', label: 'No playlists — run Refresh Playlists' }]
 		}
 
 		return this.playlists.map((p) => ({ id: p.id, label: p.name || p.readableId || p.id }))
+	}
+
+	private sessionPlaylistChoices() {
+		if (this.sessionPlaylists.length === 0) {
+			return [{ id: '', label: 'No session playlists — run Refresh Session Playlists' }]
+		}
+
+		return this.sessionPlaylists.map((p) => ({ id: p.id, label: p.name || p.readableId || p.id }))
 	}
 
 	private defaultPlaylistId(): string {
@@ -579,6 +784,14 @@ class DC extends InstanceBase<Config, undefined> {
 		}
 
 		return this.sessionClips.map((clip) => ({ id: clip.id, label: clip.name }))
+	}
+
+	private allClipChoices() {
+		if (this.allClips.length === 0) {
+			return [{ id: '', label: 'No clips loaded — run Refresh All Clips' }]
+		}
+
+		return this.allClips.map((c) => ({ id: c.id, label: c.name }))
 	}
 
 	private defaultSessionClipId(): string {
@@ -614,6 +827,14 @@ class DC extends InstanceBase<Config, undefined> {
 					const clipName = String(clip.name || clip.dynamic_name || clip.readable_id || `Clip ${index + 1}`)
 					const timecode = String(clip.short_in?.timecode || clip.orig_short_in?.timecode || '')
 					const readableId = String(clip.readable_id || '')
+
+					// Store clip_id -> readable_id and clip_id -> name for feedback display
+					if (clipId && readableId) {
+						this.clipReadableIds.set(clipId, readableId)
+					}
+					if (clipId && clipName) {
+						this.clipNames.set(clipId, clipName)
+					}
 
 					let label = clipName
 					if (readableId) label += ` | ${readableId}`
@@ -686,6 +907,7 @@ class DC extends InstanceBase<Config, undefined> {
 		const clipName = String(clip.name || clip.dynamic_name || request.readableId)
 
 		this.log('info', `Found session clip ${request.readableId}: ${clipName} / ${clipId}`)
+		this.clipNames.set(clipId, clipName)
 		this.setSelectedClip(clipId, clipName)
 
 		this.send('cue_clip', {
@@ -879,6 +1101,322 @@ class DC extends InstanceBase<Config, undefined> {
 				name: 'Refresh Sessions',
 				options: [],
 				callback: async () => this.refreshSessions(),
+			},
+
+			refresh_all_clips: {
+				name: 'Refresh All Clips',
+				options: [],
+				callback: async () => this.refreshAllClips(),
+			},
+
+			refresh_playlists: {
+				name: 'Refresh Playlists',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'session',
+						label: 'Session (for session playlists, optional)',
+						choices: [{ id: '', label: 'None' }, ...this.sessionChoices()],
+						default: '',
+					},
+				],
+				callback: async (event) => {
+					this.refreshAllPlaylists(String(event.options.session || '') || undefined)
+				},
+			},
+
+			cue_session_playlist_dropdown: {
+				name: 'Cue Session Playlist Dropdown',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'session',
+						label: 'Session',
+						choices: this.sessionChoices(),
+						default: this.defaultSessionId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'playlist_id',
+						label: 'Playlist',
+						choices: this.sessionPlaylistChoices(),
+						default: this.sessionPlaylists[0]?.id || '',
+					},
+				],
+				callback: async (event) => {
+					const outputId = String(event.options.output || '')
+					const mask = this.getSelectedMask(outputId)
+					const playlistId = String(event.options.playlist_id || '')
+
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+					if (!playlistId) return this.log('warn', 'No playlist selected — run Refresh Session Playlists first')
+
+					this.selectOutputs(mask)
+					this.send('cue_playlist', { package_id: playlistId })
+				},
+			},
+
+			play_session_playlist_dropdown: {
+				name: 'Play Session Playlist Dropdown',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'session',
+						label: 'Session',
+						choices: this.sessionChoices(),
+						default: this.defaultSessionId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'playlist_id',
+						label: 'Playlist',
+						choices: this.sessionPlaylistChoices(),
+						default: this.sessionPlaylists[0]?.id || '',
+					},
+				],
+				callback: async (event) => {
+					const outputId = String(event.options.output || '')
+					const mask = this.getSelectedMask(outputId)
+					const playlistId = String(event.options.playlist_id || '')
+
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+					if (!playlistId) return this.log('warn', 'No playlist selected — run Refresh Session Playlists first')
+
+					this.selectOutputs(mask)
+					this.send('cue_playlist', { package_id: playlistId })
+
+					setTimeout(() => {
+						this.selectOutputs(mask)
+						this.send('set_playspeed', { speed: 100 })
+					}, 150)
+				},
+			},
+
+			cue_by_clip_name: {
+				name: 'Cue Clip Name Dropdown',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'clip_id',
+						label: 'Clip',
+						choices: this.allClipChoices(),
+						default: this.allClips[0]?.id || '',
+					},
+				],
+				callback: async (event) => {
+					const outputIds = this.getSelectedOutputIds(String(event.options.output || ''))
+					const clipId = String(event.options.clip_id || '')
+
+					if (outputIds.length === 0) return this.log('warn', 'No output selected/discovered')
+					if (!clipId) return this.log('warn', 'No clip selected — run Refresh All Clips first')
+
+					this.send('cue_clip', { clip_id: clipId, outputs: outputIds, speed: 0 })
+				},
+			},
+
+			play_by_clip_name: {
+				name: 'Play Clip Name Dropdown',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'clip_id',
+						label: 'Clip',
+						choices: this.allClipChoices(),
+						default: this.allClips[0]?.id || '',
+					},
+				],
+				callback: async (event) => {
+					const outputIds = this.getSelectedOutputIds(String(event.options.output || ''))
+					const mask = this.getSelectedMask(String(event.options.output || ''))
+					const clipId = String(event.options.clip_id || '')
+
+					if (outputIds.length === 0) return this.log('warn', 'No output selected/discovered')
+					if (!clipId) return this.log('warn', 'No clip selected — run Refresh All Clips first')
+
+					this.send('cue_clip', { clip_id: clipId, outputs: outputIds, speed: 0 })
+
+					if (mask !== null) {
+						setTimeout(() => {
+							this.selectOutputs(mask)
+							this.send('set_playspeed', { speed: 100 })
+						}, 150)
+					}
+				},
+			},
+
+			cue_playlist_dropdown: {
+				name: 'Cue Playlist Dropdown',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'playlist_id',
+						label: 'Playlist',
+						choices: this.playlistChoices(),
+						default: this.defaultPlaylistId(),
+					},
+				],
+				callback: async (event) => {
+					const outputId = String(event.options.output || '')
+					const mask = this.getSelectedMask(outputId)
+					const playlistId = String(event.options.playlist_id || '')
+
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+					if (!playlistId) return this.log('warn', 'No playlist selected — run Refresh Playlists first')
+
+					this.selectOutputs(mask)
+					this.send('cue_playlist', { package_id: playlistId })
+				},
+			},
+
+			play_playlist_dropdown: {
+				name: 'Play Playlist Dropdown',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'playlist_id',
+						label: 'Playlist',
+						choices: this.playlistChoices(),
+						default: this.defaultPlaylistId(),
+					},
+				],
+				callback: async (event) => {
+					const outputId = String(event.options.output || '')
+					const mask = this.getSelectedMask(outputId)
+					const playlistId = String(event.options.playlist_id || '')
+
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+					if (!playlistId) return this.log('warn', 'No playlist selected — run Refresh Playlists first')
+
+					this.selectOutputs(mask)
+					this.send('cue_playlist', { package_id: playlistId })
+
+					setTimeout(() => {
+						this.selectOutputs(mask)
+						this.send('set_playspeed', { speed: 100 })
+					}, 150)
+				},
+			},
+
+			cue_session_clip_dropdown: {
+				name: 'Cue Session Clip Dropdown',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'session',
+						label: 'Session',
+						choices: this.sessionChoices(),
+						default: this.defaultSessionId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'clip_id',
+						label: 'Clip',
+						choices: this.sessionClipChoices(),
+						default: this.defaultSessionClipId(),
+					},
+				],
+				callback: async (event) => {
+					const outputIds = this.getSelectedOutputIds(String(event.options.output || ''))
+					const clipId = String(event.options.clip_id || '')
+
+					if (outputIds.length === 0) return this.log('warn', 'No output selected/discovered')
+					if (!clipId) return this.log('warn', 'No clip selected — run Refresh Session Clips first')
+
+					this.send('cue_clip', { clip_id: clipId, outputs: outputIds, speed: 0 })
+				},
+			},
+
+			play_session_clip_dropdown: {
+				name: 'Play Session Clip Dropdown',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'session',
+						label: 'Session',
+						choices: this.sessionChoices(),
+						default: this.defaultSessionId(),
+					},
+					{
+						type: 'dropdown',
+						id: 'clip_id',
+						label: 'Clip',
+						choices: this.sessionClipChoices(),
+						default: this.defaultSessionClipId(),
+					},
+				],
+				callback: async (event) => {
+					const outputIds = this.getSelectedOutputIds(String(event.options.output || ''))
+					const mask = this.getSelectedMask(String(event.options.output || ''))
+					const clipId = String(event.options.clip_id || '')
+
+					if (outputIds.length === 0) return this.log('warn', 'No output selected/discovered')
+					if (!clipId) return this.log('warn', 'No clip selected — run Refresh Session Clips first')
+
+					this.send('cue_clip', { clip_id: clipId, outputs: outputIds, speed: 0 })
+
+					if (mask !== null) {
+						setTimeout(() => {
+							this.selectOutputs(mask)
+							this.send('set_playspeed', { speed: 100 })
+						}, 150)
+					}
+				},
 			},
 
 			refresh_session_clips: {
@@ -1115,6 +1653,140 @@ class DC extends InstanceBase<Config, undefined> {
 				},
 			},
 
+			scrub_encoder: {
+				name: 'Scrub (Encoder / Knob)',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'number',
+						id: 'frames_per_tick',
+						label: 'Frames per tick (negative = backwards)',
+						default: 1,
+						min: -100,
+						max: 100,
+					},
+				],
+				callback: async (event) => {
+					const mask = this.getSelectedMask(String(event.options.output || ''))
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+
+					const framesPerTick = Number(event.options.frames_per_tick || 1)
+					if (framesPerTick === 0) return
+
+					this.selectOutputs(mask)
+					this.send('scrub', { scrub: framesPerTick })
+				},
+			},
+
+			scrub_encoder_back: {
+				name: 'Scrub Back (Encoder / Knob)',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'number',
+						id: 'frames_per_tick',
+						label: 'Frames per tick (negative = backwards)',
+						default: -1,
+						min: -100,
+						max: 100,
+					},
+				],
+				callback: async (event) => {
+					const mask = this.getSelectedMask(String(event.options.output || ''))
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+
+					const framesPerTick = Number(event.options.frames_per_tick || -1)
+					if (framesPerTick === 0) return
+
+					this.selectOutputs(mask)
+					this.send('scrub', { scrub: framesPerTick })
+				},
+			},
+
+			playspeed_encoder_up: {
+				name: 'Playspeed Up (Encoder / Knob)',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'number',
+						id: 'step',
+						label: 'Speed step per tick (%)',
+						default: 10,
+						min: 1,
+						max: 100,
+					},
+				],
+				callback: async (event) => {
+					const outputId = String(event.options.output || '')
+					const mask = this.getSelectedMask(outputId)
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+
+					const step = Number(event.options.step || 10)
+					const ids = this.getSelectedOutputIds(outputId)
+					const current = ids.length === 1
+						? (this.outputStatuses.get(ids[0])?.playspeed ?? 0)
+						: 0
+					const newSpeed = Math.min(100, current + step)
+
+					this.selectOutputs(mask)
+					this.send('set_playspeed', { speed: newSpeed })
+				},
+			},
+
+			playspeed_encoder_down: {
+				name: 'Playspeed Down (Encoder / Knob)',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'number',
+						id: 'step',
+						label: 'Speed step per tick (%)',
+						default: 10,
+						min: 1,
+						max: 100,
+					},
+				],
+				callback: async (event) => {
+					const outputId = String(event.options.output || '')
+					const mask = this.getSelectedMask(outputId)
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+
+					const step = Number(event.options.step || 10)
+					const ids = this.getSelectedOutputIds(outputId)
+					const current = ids.length === 1
+						? (this.outputStatuses.get(ids[0])?.playspeed ?? 0)
+						: 0
+					const newSpeed = Math.max(0, current - step)
+
+					this.selectOutputs(mask)
+					this.send('set_playspeed', { speed: newSpeed })
+				},
+			},
+
 			goto_live: {
 				name: 'Goto Live',
 				options: [
@@ -1209,6 +1881,47 @@ class DC extends InstanceBase<Config, undefined> {
 					this.login()
 					this.selectOutputs(mask)
 					this.send('mark_out', {})
+				},
+			},
+
+			create_meta_mark: {
+				name: 'Create Meta Mark',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output (for timecode position)',
+						choices: this.outputChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'textinput',
+						id: 'name',
+						label: 'Mark Name',
+						default: 'Mark',
+					},
+				],
+				callback: async (event) => {
+					const outputId = String(event.options.output || '')
+					const markName = String(event.options.name || 'Mark')
+					const status = this.outputStatuses.get(outputId)
+
+					if (!status) return this.log('warn', 'No output status available — wait for connection')
+					if (!status.timecode) return this.log('warn', 'No timecode available for this output')
+					if (!status.date) return this.log('warn', 'No date available for this output')
+
+					// Strip sub-frame portion (e.g. "17:06:42.33.0" -> "17:06:42.33")
+					const timecode = status.timecode.replace(/(\.\d+)\.\d+$/, '$1')
+
+					// Send over TCP so the creator matches the logged-in username
+					this.login()
+					this.send('create_meta_mark', {
+						name: markName,
+						position: {
+							date: status.date,
+							timecode,
+						},
+					})
 				},
 			},
 
@@ -1519,6 +2232,324 @@ class DC extends InstanceBase<Config, undefined> {
 					this.send(method, params)
 				},
 			},
+
+			restart_collectd: {
+				name: 'Restart Database (restart_collectd)',
+				options: [],
+				callback: async () => {
+					this.send('restart_collectd', null)
+				},
+			},
+
+			skip_next_clip: {
+				name: 'Skip Next Clip',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+				],
+				callback: async (event) => {
+					const mask = this.getSelectedMask(String(event.options.output || ''))
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+					this.selectOutputs(mask)
+					this.send('skip_next_clip', null)
+				},
+			},
+
+			next_clip: {
+				name: 'Next Clip',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputComboChoices(),
+						default: this.defaultOutputId(),
+					},
+				],
+				callback: async (event) => {
+					const mask = this.getSelectedMask(String(event.options.output || ''))
+					if (mask === null) return this.log('warn', 'No output selected/discovered')
+					this.selectOutputs(mask)
+					this.send('next_clip', null)
+				},
+			},
+		}
+	}
+
+	private getFeedbacks(): CompanionFeedbackDefinitions {
+		return {
+			ping: {
+				type: 'advanced',
+				name: 'Ping — Connection Status',
+				description: 'Green when DreamCatcher responds within 2s, red if no response.',
+				options: [],
+				callback: () => {
+					if (this.lastPingMs === null) {
+						return { bgcolor: combineRgb(80, 80, 80), text: 'PING\n--' }
+					}
+					if (this.lastPingMs < 0) {
+						return { bgcolor: combineRgb(160, 0, 0), text: 'PING\nTIMEOUT' }
+					}
+					return {
+						bgcolor: combineRgb(0, 150, 0),
+						text: `PING\n${this.lastPingMs}ms`,
+					}
+				},
+			},
+
+			storage_info: {
+				type: 'advanced',
+				name: 'Record Time Remaining',
+				description: 'Shows recording time remaining from get_storage_info. Green = plenty, yellow = low, red = critical.',
+				options: [
+					{
+						type: 'number',
+						id: 'warn_minutes',
+						label: 'Warning threshold (minutes remaining)',
+						default: 60,
+						min: 1,
+						max: 9999,
+					},
+					{
+						type: 'number',
+						id: 'crit_minutes',
+						label: 'Critical threshold (minutes remaining)',
+						default: 15,
+						min: 1,
+						max: 9999,
+					},
+				],
+				callback: (feedback) => {
+					const secs = this.storageInfo.timeRemainingSeconds
+					if (secs === undefined) {
+						return { bgcolor: combineRgb(80, 80, 80), text: 'REC TIME\n--' }
+					}
+
+					const warn = Number(feedback.options.warn_minutes ?? 60) * 60
+					const crit = Number(feedback.options.crit_minutes ?? 15) * 60
+
+					let bgcolor: number
+					if (secs <= crit) {
+						bgcolor = combineRgb(160, 0, 0)
+					} else if (secs <= warn) {
+						bgcolor = combineRgb(180, 150, 0)
+					} else {
+						bgcolor = combineRgb(0, 100, 0)
+					}
+
+					const h = Math.floor(secs / 3600)
+					const m = Math.floor((secs % 3600) / 60)
+					const s = Math.floor(secs % 60)
+					const timeStr = `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+
+					return {
+						bgcolor,
+						text: `REC TIME\n${timeStr}`,
+					}
+				},
+			},
+
+			nas_info: {
+				type: 'advanced',
+				name: 'NAS Status',
+				description: 'Shows connected/disconnected status for a specific NAS mount.',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'mount',
+						label: 'NAS Mount',
+						choices: this.nasInfo.mounts.length > 0
+							? this.nasInfo.mounts.map((m) => ({ id: m.path, label: m.name }))
+							: [{ id: '', label: 'No mounts — wait for poll' }],
+						default: this.nasInfo.mounts[0]?.path || '',
+					},
+				],
+				callback: (feedback) => {
+					const mountPath = String(feedback.options.mount || '')
+					const mount = this.nasInfo.mounts.find((m) => m.path === mountPath)
+
+					if (!mount) {
+						return { bgcolor: combineRgb(80, 80, 80), text: 'NAS\n--' }
+					}
+
+					return {
+						bgcolor: mount.connected ? combineRgb(0, 150, 0) : combineRgb(160, 0, 0),
+						text: `${mount.name}\n${mount.connected ? 'CONNECTED' : 'OFFLINE'}`,
+					}
+				},
+			},
+
+			timecode_display: {
+				type: 'advanced',
+				name: 'Timecode Display — System Time',
+				description: 'Shows the current system timecode from the first Montage output.',
+				options: [],
+				callback: () => {
+					// Use the first MontageOutput for system time
+					const montageOutput = this.outputs.find((o) =>
+						o.name.toLowerCase().includes('montage')
+					) || this.outputs[0]
+
+					const status = montageOutput ? this.outputStatuses.get(montageOutput.id) : undefined
+					const tc = status?.timecode?.replace(/\..*$/, '') || '--:--:--'
+
+					return {
+						bgcolor: combineRgb(0, 0, 80),
+						text: `SYSTEM TIME\n${tc}`,
+					}
+				},
+			},
+
+			output_playing_simple: {
+				type: 'advanced',
+				name: 'Output Playing — Simple Green/Yellow/Red',
+				description: 'Green at 100%, yellow at 1-99%, red at 0%. Shows output name and speed.',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputChoices(),
+						default: this.defaultOutputId(),
+					},
+					{
+						type: 'colorpicker',
+						id: 'color_playing',
+						label: 'Colour at 100% (full speed)',
+						default: combineRgb(0, 150, 0),
+					},
+					{
+						type: 'colorpicker',
+						id: 'color_slow',
+						label: 'Colour at 1–99% (slow/varispeed)',
+						default: combineRgb(180, 150, 0),
+					},
+					{
+						type: 'colorpicker',
+						id: 'color_stopped',
+						label: 'Colour at 0% (stopped/paused)',
+						default: combineRgb(160, 0, 0),
+					},
+				],
+				callback: (feedback) => {
+					const outputId = String(feedback.options.output || '')
+					const status = this.outputStatuses.get(outputId)
+
+					if (!status) return {}
+
+					const outputName = status.name
+						|| this.outputs.find((o) => o.id === outputId)?.name
+						|| 'OUTPUT'
+
+					let bgcolor: number
+					if (status.playspeed === 100) {
+						bgcolor = Number(feedback.options.color_playing)
+					} else if (status.playspeed > 0) {
+						bgcolor = Number(feedback.options.color_slow)
+					} else {
+						bgcolor = Number(feedback.options.color_stopped)
+					}
+
+					return {
+						bgcolor,
+						text: `${outputName}\n${status.playspeed}%`,
+					}
+				},
+			},
+
+			output_playing: {
+				type: 'advanced',
+				name: 'Output Status — Name + Time Remaining',
+				description: 'Shows the output name and clip/playlist time remaining. Green = playing, Yellow = paused/0%, Red = nothing playing.',
+				options: [
+					{
+						type: 'dropdown',
+						id: 'output',
+						label: 'Output',
+						choices: this.outputChoices(),
+						default: this.defaultOutputId(),
+					},
+				],
+				callback: (feedback) => {
+					const outputId = String(feedback.options.output || '')
+					const status = this.outputStatuses.get(outputId)
+
+					// No status yet — don't override button text at all
+					if (!status) {
+						return {}
+					}
+
+					const outputName = status?.name
+						|| this.outputs.find((o) => o.id === outputId)?.name
+						|| 'OUTPUT'
+
+					const timecode = status.timecode.replace(/^(00:)+/, '') || '--:--'
+
+					// Live input — clip_id matches a known input UUID
+					const isLive = !!status.clip_id && this.inputs.some((i) => i.id === status.clip_id)
+					if (isLive) {
+						const rawName = this.inputs.find((i) => i.id === status.clip_id)?.name || 'LIVE'
+						const inputName = rawName.length > 15 ? rawName.slice(0, 15) : rawName
+						return {
+							bgcolor: combineRgb(0, 75, 160),
+							text: `${outputName}\n${inputName}\n${timecode}`,
+						}
+					}
+
+					// Idle — no clip, just show red with no text override
+					if (!status.clip_id) {
+						return {
+							bgcolor: combineRgb(160, 0, 0),
+						}
+					}
+
+					// If we don't have the clip name yet, fetch it on demand
+					if (!this.clipNames.has(status.clip_id)) {
+						this.fetchClipName(status.clip_id)
+					}
+
+					// Playlist or clip
+					const isPlaylist = !!status.playlist_id
+					const rawTime = isPlaylist ? status.playlist_time_remaining : status.clip_time_remaining
+					const cleanTime = rawTime.replace(/^(00:)+/, '').replace(/^0+(?=\d)/, '')
+					const time = cleanTime && cleanTime !== '0' && cleanTime !== '.00'
+						? cleanTime
+						: timecode
+
+					let identifier: string
+					if (isPlaylist) {
+						if (!this.playlistNames.has(status.playlist_id)) {
+							this.fetchPlaylistName(status.playlist_id)
+						}
+						const name = this.playlistNames.get(status.playlist_id) || '?'
+						identifier = name.length > 15 ? name.slice(0, 15) : name
+					} else {
+						const rawName = this.clipNames.get(status.clip_id)
+						const name = rawName || '?'
+						identifier = name.length > 15 ? name.slice(0, 15) : name
+					}
+
+					// 100% = green, 1-99% = yellow, 0% = red
+					let bgcolor: number
+					if (status.playspeed === 100) {
+						bgcolor = combineRgb(0, 150, 0)
+					} else if (status.playspeed > 0) {
+						bgcolor = combineRgb(180, 150, 0)
+					} else {
+						bgcolor = combineRgb(160, 0, 0)
+					}
+
+					return {
+						bgcolor,
+						text: `${outputName}\n${identifier}\n${time}`,
+					}
+				},
+			},
 		}
 	}
 
@@ -1693,6 +2724,69 @@ class DC extends InstanceBase<Config, undefined> {
 				feedbacks: [],
 			},
 
+			restart_collectd_preset: {
+				type: 'button',
+				category: 'System Restart',
+				name: 'Restart Database',
+				style: { text: 'RESTART\nDATABASE', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(140, 60, 0) },
+				steps: [{ down: [{ actionId: 'restart_collectd', options: {} }], up: [] }],
+				feedbacks: [],
+			},
+
+			ping_monitor: {
+				type: 'button',
+				category: 'System',
+				name: 'Ping Monitor',
+				style: { text: 'PING\n--', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(80, 80, 80) },
+				steps: [{ down: [], up: [] }],
+				feedbacks: [{ feedbackId: 'ping', options: {} }],
+			},
+
+			storage_monitor: {
+				type: 'button',
+				category: 'System',
+				name: 'Record Time Remaining',
+				style: { text: 'REC TIME\n--', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(80, 80, 80) },
+				steps: [{ down: [], up: [] }],
+				feedbacks: [{ feedbackId: 'storage_info', options: { warn_minutes: 60, crit_minutes: 15 } }],
+			},
+
+			nas_monitor: {
+				type: 'button',
+				category: 'System',
+				name: 'NAS Monitor',
+				style: { text: 'NAS\n--', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(80, 80, 80) },
+				steps: [{ down: [], up: [] }],
+				feedbacks: [{ feedbackId: 'nas_info', options: {} }],
+			},
+
+			timecode_monitor: {
+				type: 'button',
+				category: 'System',
+				name: 'Timecode Display',
+				style: { text: 'SYSTEM TIME\n--:--:--', size: '24', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 0, 80) },
+				steps: [{ down: [], up: [] }],
+				feedbacks: [{ feedbackId: 'timecode_display', options: {} }],
+			},
+
+			next_clip_preset: {
+				type: 'button',
+				category: 'Output Control',
+				name: 'Next Clip',
+				style: { text: 'NEXT\nCLIP', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 80, 120) },
+				steps: [{ down: [{ actionId: 'next_clip', options: { output: this.defaultOutputId() } }], up: [] }],
+				feedbacks: [],
+			},
+
+			skip_next_clip_preset: {
+				type: 'button',
+				category: 'Output Control',
+				name: 'Skip Next Clip',
+				style: { text: 'SKIP\nNEXT', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(120, 60, 0) },
+				steps: [{ down: [{ actionId: 'skip_next_clip', options: { output: this.defaultOutputId() } }], up: [] }],
+				feedbacks: [],
+			},
+
 			start_capture: {
 				type: 'button',
 				category: 'Capture Control',
@@ -1729,9 +2823,19 @@ class DC extends InstanceBase<Config, undefined> {
 				type: 'button',
 				category: 'Output Control',
 				name: 'Play Output 1',
-				style: { text: 'PLAY\nOUT 1', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 120, 0) },
+				style: { text: 'PLAY\nOUT 1', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(160, 0, 0) },
 				steps: [{ down: [{ actionId: 'play', options: { output: out1, speed: 100 } }], up: [] }],
-				feedbacks: [],
+				feedbacks: [
+					{
+						feedbackId: 'output_playing_simple',
+						options: {
+							output: out1,
+							color_playing: combineRgb(0, 150, 0),
+							color_slow: combineRgb(180, 150, 0),
+							color_stopped: combineRgb(160, 0, 0),
+						},
+					},
+				],
 			},
 
 			pause_out1: {
@@ -1761,6 +2865,50 @@ class DC extends InstanceBase<Config, undefined> {
 				feedbacks: [],
 			},
 
+			scrub_encoder_out1: {
+				type: 'button',
+				category: 'Output Control',
+				name: 'Scrub Encoder Output 1',
+				style: { text: 'SCRUB\nKNOB', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(80, 80, 80) },
+				options: { rotaryActions: true },
+				steps: [
+					{
+						down: [],
+						up: [],
+						rotate_left: [{ actionId: 'scrub_encoder_back', options: { output: out1, frames_per_tick: -5 } }],
+						rotate_right: [{ actionId: 'scrub_encoder', options: { output: out1, frames_per_tick: 5 } }],
+					},
+				],
+				feedbacks: [],
+			},
+
+			playspeed_encoder_out1: {
+				type: 'button',
+				category: 'Output Control',
+				name: 'Playspeed Encoder Output 1',
+				style: { text: 'SPEED\nKNOB', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(80, 80, 80) },
+				options: { rotaryActions: true },
+				steps: [
+					{
+						down: [{ actionId: 'play', options: { output: out1, speed: 100 } }],
+						up: [],
+						rotate_left: [{ actionId: 'playspeed_encoder_down', options: { output: out1, step: 10 } }],
+						rotate_right: [{ actionId: 'playspeed_encoder_up', options: { output: out1, step: 10 } }],
+					},
+				],
+				feedbacks: [
+					{
+						feedbackId: 'output_playing_simple',
+						options: {
+							output: out1,
+							color_playing: combineRgb(0, 150, 0),
+							color_slow: combineRgb(180, 150, 0),
+							color_stopped: combineRgb(160, 0, 0),
+						},
+					},
+				],
+			},
+
 			live_out1: {
 				type: 'button',
 				category: 'Output Control',
@@ -1788,6 +2936,21 @@ class DC extends InstanceBase<Config, undefined> {
 				feedbacks: [],
 			},
 
+			// Output Control + Feedback — single preset with full status feedback
+			output_status_feedback: {
+				type: 'button',
+				category: 'Output Control + Feedback',
+				name: 'Output Status',
+				style: { text: 'OUTPUT\nSTATUS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 120, 0) },
+				steps: [{ down: [{ actionId: 'play', options: { output: out1, speed: 100 } }], up: [] }],
+				feedbacks: [
+					{
+						feedbackId: 'output_playing',
+						options: { output: out1 },
+					},
+				],
+			},
+
 			mark_in: {
 				type: 'button',
 				category: 'Clip Workflow',
@@ -1803,6 +2966,25 @@ class DC extends InstanceBase<Config, undefined> {
 				name: 'Mark Out',
 				style: { text: 'MARK\nOUT', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 90, 160) },
 				steps: [{ down: [{ actionId: 'mark_out', options: { output: out1 } }], up: [] }],
+				feedbacks: [],
+			},
+
+			create_meta_mark: {
+				type: 'button',
+				category: 'Clip Workflow',
+				name: 'Create Meta Mark',
+				style: { text: 'META\nMARK', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(160, 80, 0) },
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'create_meta_mark',
+								options: { output: out1, name: 'Mark' },
+							},
+						],
+						up: [],
+					},
+				],
 				feedbacks: [],
 			},
 
@@ -1843,6 +3025,258 @@ class DC extends InstanceBase<Config, undefined> {
 				feedbacks: [],
 			},
 
+			refresh_all_clips: {
+				type: 'button',
+				category: 'System',
+				name: 'Refresh All Clips',
+				style: {
+					text: 'REFRESH\nALL CLIPS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(50, 50, 50),
+				},
+				steps: [{ down: [{ actionId: 'refresh_all_clips', options: {} }], up: [] }],
+				feedbacks: [],
+			},
+
+			cue_playlist_dropdown_preset: {
+				type: 'button',
+				category: 'Playlist Hotkeys',
+				name: 'Cue Playlist Dropdown',
+				style: {
+					text: 'CUE\nPLAYLIST',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(45, 45, 120),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'cue_playlist_dropdown',
+								options: { output: out1, playlist_id: this.defaultPlaylistId() },
+							},
+						],
+						up: [],
+					},
+				],
+				feedbacks: [],
+			},
+
+			play_playlist_dropdown_preset: {
+				type: 'button',
+				category: 'Playlist Hotkeys',
+				name: 'Play Playlist Dropdown',
+				style: {
+					text: 'PLAY\nPLAYLIST',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(0, 120, 0),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'play_playlist_dropdown',
+								options: { output: out1, playlist_id: this.defaultPlaylistId() },
+							},
+						],
+						up: [],
+					},
+				],
+				feedbacks: [],
+			},
+
+			cue_session_playlist_dropdown_preset: {
+				type: 'button',
+				category: 'Playlist Hotkeys',
+				name: 'Cue Session Playlist Dropdown',
+				style: {
+					text: 'CUE SESSION\nPLAYLIST',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(45, 45, 120),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'cue_session_playlist_dropdown',
+								options: {
+									output: out1,
+									session: this.defaultSessionId(),
+									playlist_id: this.sessionPlaylists[0]?.id || '',
+								},
+							},
+						],
+						up: [],
+					},
+				],
+				feedbacks: [],
+			},
+
+			play_session_playlist_dropdown_preset: {
+				type: 'button',
+				category: 'Playlist Hotkeys',
+				name: 'Play Session Playlist Dropdown',
+				style: {
+					text: 'PLAY SESSION\nPLAYLIST',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(0, 120, 0),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'play_session_playlist_dropdown',
+								options: {
+									output: out1,
+									session: this.defaultSessionId(),
+									playlist_id: this.sessionPlaylists[0]?.id || '',
+								},
+							},
+						],
+						up: [],
+					},
+				],
+				feedbacks: [],
+			},
+
+			refresh_playlists_preset: {
+				type: 'button',
+				category: 'System',
+				name: 'Refresh Playlists',
+				style: {
+					text: 'REFRESH\nPLAYLISTS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(50, 50, 50),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'refresh_playlists',
+								options: { session: this.defaultSessionId() },
+							},
+						],
+						up: [],
+					},
+				],
+				feedbacks: [],
+			},
+
+			cue_by_clip_name_preset: {
+				type: 'button',
+				category: 'Clip Hotkeys',
+				name: 'Cue Clip Name Dropdown',
+				style: {
+					text: 'CUE CLIP\nNAME DROPDOWN',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(45, 45, 120),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'cue_by_clip_name',
+								options: {
+									output: out1,
+									clip_id: this.allClips[0]?.id || '',
+								},
+							},
+						],
+						up: [],
+					},
+				],
+				feedbacks: [],
+			},
+
+			play_by_clip_name_preset: {
+				type: 'button',
+				category: 'Clip Hotkeys',
+				name: 'Play Clip Name Dropdown',
+				style: {
+					text: 'PLAY CLIP\nNAME DROPDOWN',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(0, 120, 0),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'play_by_clip_name',
+								options: {
+									output: out1,
+									clip_id: this.allClips[0]?.id || '',
+								},
+							},
+						],
+						up: [],
+					},
+				],
+				feedbacks: [],
+			},
+
+			cue_session_clip_dropdown_preset: {
+				type: 'button',
+				category: 'Clip Hotkeys',
+				name: 'Cue Session Clip Dropdown',
+				style: {
+					text: 'CUE SESSION\nCLIP DROPDOWN',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(45, 45, 120),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'cue_session_clip_dropdown',
+								options: {
+									output: out1,
+									session: this.defaultSessionId(),
+									clip_id: this.defaultSessionClipId(),
+								},
+							},
+						],
+						up: [],
+					},
+				],
+				feedbacks: [],
+			},
+
+			play_session_clip_dropdown_preset: {
+				type: 'button',
+				category: 'Clip Hotkeys',
+				name: 'Play Session Clip Dropdown',
+				style: {
+					text: 'PLAY SESSION\nCLIP DROPDOWN',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(0, 120, 0),
+				},
+				steps: [
+					{
+						down: [
+							{
+								actionId: 'play_session_clip_dropdown',
+								options: {
+									output: out1,
+									session: this.defaultSessionId(),
+									clip_id: this.defaultSessionClipId(),
+								},
+							},
+						],
+						up: [],
+					},
+				],
+				feedbacks: [],
+			},
+
 			refresh_session_clips: {
 				type: 'button',
 				category: 'System',
@@ -1864,7 +3298,7 @@ class DC extends InstanceBase<Config, undefined> {
 				category: 'Clip Hotkeys',
 				name: 'Cue Session Clip by PBS',
 				style: {
-					text: 'CUE SESSION\nPBS',
+					text: 'CUE SESSION\nCLIP BY PBS',
 					size: '14',
 					color: combineRgb(255, 255, 255),
 					bgcolor: combineRgb(45, 45, 120),
@@ -1896,7 +3330,7 @@ class DC extends InstanceBase<Config, undefined> {
 				category: 'Clip Hotkeys',
 				name: 'Play Session Clip by PBS',
 				style: {
-					text: 'PLAY SESSION\nPBS',
+					text: 'PLAY SESSION\nCLIP BY PBS',
 					size: '14',
 					color: combineRgb(255, 255, 255),
 					bgcolor: combineRgb(0, 100, 70),
@@ -1920,7 +3354,7 @@ class DC extends InstanceBase<Config, undefined> {
 				category: 'Clip Hotkeys',
 				name: 'Cue Clip by PBS',
 				style: {
-					text: 'CUE\nCLIP NAME',
+					text: 'CUE CLIP\nBY PBS',
 					size: '14',
 					color: combineRgb(255, 255, 255),
 					bgcolor: combineRgb(45, 45, 120),
@@ -1944,7 +3378,7 @@ class DC extends InstanceBase<Config, undefined> {
 				category: 'Clip Hotkeys',
 				name: 'Play Clip by PBS',
 				style: {
-					text: 'PLAY\nCLIP NAME',
+					text: 'PLAY CLIP\nBY PBS',
 					size: '14',
 					color: combineRgb(255, 255, 255),
 					bgcolor: combineRgb(0, 100, 70),
@@ -2235,11 +3669,14 @@ class DC extends InstanceBase<Config, undefined> {
 			.get(url, { rejectUnauthorized: false }, (res) => {
 				let body = ''
 
+				this.log('debug', `HTTP ${method} status: ${res.statusCode}`)
+
 				res.on('data', (chunk) => {
 					body += chunk.toString()
 				})
 
 				res.on('end', () => {
+					this.log('debug', `HTTP ${method} body: ${body.slice(0, 300)}`)
 					try {
 						const msg = JSON.parse(body)
 						if (msg.error) {
@@ -2249,7 +3686,7 @@ class DC extends InstanceBase<Config, undefined> {
 
 						callback(msg.result)
 					} catch (e) {
-						this.log('error', `Could not parse HTTP JSON-RPC ${method} response: ${String(e)} / ${body}`)
+						this.log('error', `Could not parse HTTP JSON-RPC ${method} response: ${String(e)} / ${body.slice(0, 200)}`)
 					}
 				})
 			})
@@ -2263,6 +3700,7 @@ class DC extends InstanceBase<Config, undefined> {
 		this.refreshInputs()
 		this.refreshBins()
 		this.refreshExportProfiles()
+		this.refreshAllPlaylists()
 
 		this.refreshSessions(() => {
 			const targetSessionId = sessionId || this.defaultSessionId()
@@ -2297,9 +3735,94 @@ class DC extends InstanceBase<Config, undefined> {
 		})
 	}
 
-	private refreshPlaylists(): void {
-		this.log('info', 'Requesting local playlists with find_local_playlists')
-		this.send('find_local_playlists', {})
+	private refreshAllPlaylists(sessionId?: string): void {
+		this.log('info', 'Fetching all playlists via HTTP')
+
+		// Fetch local playlists
+		this.httpJsonRpc('find_local_playlists', { name: '' }, (result) => {
+			const rawPlaylists = this.extractArray(result)
+			const seen = new Set<string>()
+			this.playlists = rawPlaylists
+				.map((p: any) => this.normalizePlaylist(p))
+				.filter((p: PlaylistInfo) => {
+					if (!p.id || seen.has(p.id)) return false
+					seen.add(p.id)
+					return true
+				})
+
+			this.log('info', `Discovered ${this.playlists.length} local playlists`)
+
+			// Also fetch session playlists if a session is provided
+			const targetSession = sessionId || this.defaultSessionId()
+			if (targetSession) {
+				this.httpJsonRpc('find_playlists', { session_id: targetSession, name: '' }, (result2) => {
+					const rawSession = this.extractArray(result2)
+					const seenSession = new Set<string>()
+					this.sessionPlaylists = rawSession
+						.map((p: any) => this.normalizePlaylist(p))
+						.filter((p: PlaylistInfo) => {
+							if (!p.id || seenSession.has(p.id)) return false
+							seenSession.add(p.id)
+							return true
+						})
+
+					this.log('info', `Discovered ${this.sessionPlaylists.length} session playlists`)
+					this.refreshDefinitions()
+				})
+			} else {
+				this.refreshDefinitions()
+			}
+		})
+	}
+
+	// Keep for targeted session playlist refresh
+	private refreshSessionPlaylists(sessionId: string): void {
+		if (!sessionId) {
+			this.log('warn', 'No session selected for playlist refresh')
+			return
+		}
+
+		this.log('info', `Fetching playlists for session ${sessionId}`)
+		this.httpJsonRpc('find_playlists', { session_id: sessionId, name: '' }, (result) => {
+			const rawPlaylists = this.extractArray(result)
+			const seen = new Set<string>()
+			this.sessionPlaylists = rawPlaylists
+				.map((p: any) => this.normalizePlaylist(p))
+				.filter((p: PlaylistInfo) => {
+					if (!p.id || seen.has(p.id)) return false
+					seen.add(p.id)
+					return true
+				})
+
+			this.log('info', `Discovered ${this.sessionPlaylists.length} session playlists`)
+			this.refreshDefinitions()
+		})
+	}
+
+	private refreshAllClips(): void {
+		this.httpJsonRpc('find_clips', { limit: 1000 }, (result) => {
+			const rawClips = this.extractArray(result)
+
+			this.allClips = rawClips
+				.filter((clip: any) => {
+					if (clip.placeholder === true) return false
+					if (clip.primary === false) return false
+					if (clip.clip_id && clip.clip_id === clip.record_train_id) return false
+					if (clip.name && /^Input\d+$/i.test(String(clip.name))) return false
+					return true
+				})
+				.map((clip: any) => {
+					const id = String(clip.clip_id || clip.id || '')
+					const name = String(clip.name || clip.dynamic_name || clip.readable_id || id)
+					// Also store in clipNames for feedback display
+					if (id && name) this.clipNames.set(id, name)
+					return { id, name }
+				})
+				.filter((c: { id: string; name: string }) => c.id.length > 0)
+
+			this.log('info', `Loaded ${this.allClips.length} clips for name-based cueing`)
+			this.refreshDefinitions()
+		})
 	}
 
 	private selectOutputs(mask: number): void {
