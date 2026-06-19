@@ -2,7 +2,7 @@
 
 Companion control module for Evertz DreamCatcher replay systems.
 
-This module provides operator-focused control of DreamCatcher outputs, replay workflows, capture control, routing, mosaic layouts, session-based clip recall, and system maintenance directly from Bitfocus Companion.
+This module provides operator-focused control of DreamCatcher outputs, replay workflows, capture control, routing, mosaic layouts, session-based clip recall, playlist control, system monitoring, and system maintenance directly from Bitfocus Companion.
 
 ---
 
@@ -20,12 +20,13 @@ This button refreshes the information Companion needs from the server, including
 - Export profiles
 - Sessions
 - Clip names for the selected/default session
+- Local and session playlists
 
 Recommended workflow:
 
 1. Connect the module to DreamCatcher.
 2. Press **Refresh Connection**.
-3. Confirm your output, session, and source dropdowns are populated.
+3. Confirm your output, session, source, and playlist dropdowns are populated.
 4. Use the cue/play/clip workflow actions as needed.
 
 If a dropdown does not show the expected information, press **Refresh Connection** first before troubleshooting individual actions.
@@ -56,7 +57,7 @@ Default:
 
 ## Username
 
-Operator name used for session control and PBS/readable ID workflows.
+Operator name used for session control, PBS/readable ID workflows, and meta mark creation.
 
 Example:
 
@@ -98,6 +99,23 @@ Use when:
 
 ---
 
+## Create Meta Mark
+
+Creates a meta mark at the current timecode of the selected output. The creator is set to the logged-in username configured in the module settings.
+
+Options:
+
+- Output (used to read current timecode position)
+- Mark Name
+
+Use when:
+
+- Marking a moment in the timeline for later reference
+- Tagging significant plays or events during a live session
+- Building a bookmark list for editorial review
+
+---
+
 ## Cue Clip by Page / Bank / Slot / Angle
 
 Finds a clip using the standard Page / Bank / Slot / Angle format and cues it to the selected output.
@@ -122,6 +140,39 @@ Example:
 ```text
 Page 1 / Bank 1 / Slot 4 / Angle A
 ```
+
+---
+
+## Cue Clip Name Dropdown
+
+Cues a clip at 0% speed using a dropdown list of all clips on the system. The clip list is loaded automatically on connect and can be refreshed with **Refresh All Clips**.
+
+Options:
+
+- Output
+- Clip (dropdown)
+
+Use when:
+
+- You want to browse and select a clip by name
+- You are not using PBS-style addressing
+- You want to prepare a clip before playing it
+
+---
+
+## Cue Playlist Dropdown
+
+Cues a local playlist at 0% speed from a dropdown of all playlists on the system.
+
+Options:
+
+- Output
+- Playlist (dropdown)
+
+Use when:
+
+- Loading a playlist without immediately playing it
+- Preparing a playlist for manual playback
 
 ---
 
@@ -154,6 +205,40 @@ Recommended workflow:
 
 ---
 
+## Cue Session Clip Dropdown
+
+Cues a clip from a specific session's clip list at 0% speed using a dropdown.
+
+Options:
+
+- Output
+- Session
+- Clip (dropdown)
+
+Use when:
+
+- You want to browse clips within a specific session by name
+- You want to cue without immediately playing
+
+---
+
+## Cue Session Playlist Dropdown
+
+Cues a playlist from a specific session at 0% speed.
+
+Options:
+
+- Output
+- Session
+- Playlist (dropdown)
+
+Use when:
+
+- Loading a session-specific playlist before playing
+- Working within a defined session context
+
+---
+
 ## Goto In
 
 Moves the selected output to the current In mark.
@@ -161,12 +246,6 @@ Moves the selected output to the current In mark.
 Options:
 
 - Output
-
-Use when:
-
-- Reviewing a marked clip
-- Jumping back to the start point before creating or checking a clip
-- Quickly lining up the output at the In mark
 
 ---
 
@@ -178,12 +257,6 @@ Options:
 
 - Output
 
-Use when:
-
-- Leaving replay mode
-- Returning to the live source
-- Resetting an output after playback or scrubbing
-
 ---
 
 ## Goto Out
@@ -193,12 +266,6 @@ Moves the selected output to the current Out mark.
 Options:
 
 - Output
-
-Use when:
-
-- Reviewing the end of a marked clip
-- Checking the Out point before creating a clip
-- Verifying clip duration or endpoint
 
 ---
 
@@ -210,11 +277,6 @@ Options:
 
 - Output
 
-Use when:
-
-- Starting a clip mark
-- Defining the beginning of a replay or highlight
-
 ---
 
 ## Mark Out
@@ -225,10 +287,20 @@ Options:
 
 - Output
 
+---
+
+## Next Clip
+
+Advances playback to the next clip in a playlist on the selected output.
+
+Options:
+
+- Output
+
 Use when:
 
-- Finishing a clip mark
-- Defining the end of a replay or highlight
+- Playing through a playlist manually
+- Stepping forward through a sequence of clips
 
 ---
 
@@ -239,12 +311,6 @@ Pauses playback on the selected output.
 Options:
 
 - Output
-
-Use when:
-
-- Freezing replay playback
-- Holding on a frame
-- Stopping transport without returning live
 
 ---
 
@@ -266,13 +332,6 @@ Playback speed examples:
 -100 = reverse playback
 ```
 
-Use when:
-
-- Playing replay
-- Running slow motion
-- Playing forward or reverse
-- Resuming from pause
-
 ---
 
 ## Play Clip by Page / Bank / Slot / Angle
@@ -287,11 +346,32 @@ Options:
 - Slot
 - Angle
 
+---
+
+## Play Clip Name Dropdown
+
+Cues and immediately plays a clip at 100% using a dropdown list of all clips on the system.
+
+Options:
+
+- Output
+- Clip (dropdown)
+
 Use when:
 
-- You want a one-button recall and roll
-- You know the PBS location of the clip
-- You do not need to cue and wait
+- You want a one-button clip selection and roll
+- You are browsing clips by name
+
+---
+
+## Play Playlist Dropdown
+
+Cues and plays a local playlist at 100% from a dropdown.
+
+Options:
+
+- Output
+- Playlist (dropdown)
 
 ---
 
@@ -308,46 +388,73 @@ Options:
 - Slot
 - Angle
 
+---
+
+## Play Session Clip Dropdown
+
+Cues and plays a clip from a specific session's clip list at 100%.
+
+Options:
+
+- Output
+- Session
+- Clip (dropdown)
+
+---
+
+## Play Session Playlist Dropdown
+
+Cues and plays a playlist from a specific session at 100%.
+
+Options:
+
+- Output
+- Session
+- Playlist (dropdown)
+
+---
+
+## Playspeed Down (Encoder / Knob)
+
+Decreases the playspeed of the selected output by a configurable step per knob tick. Reads the current playspeed and steps down from it.
+
+Options:
+
+- Output
+- Speed step per tick (%)
+
 Use when:
 
-- You know the PBS location of a clip within a session
-- You want fast session-based replay recall
-- You do not want to browse a clip dropdown
+- Using a physical knob to dial down replay speed
+- Gradually slowing from full speed to slow motion
 
-Recommended workflow:
+---
 
-1. Press **Refresh Connection** or **Refresh Sessions**.
-2. Select the correct session.
-3. Enter the Page / Bank / Slot / Angle.
-4. Trigger **Play Session Clip by PBS**.
+## Playspeed Up (Encoder / Knob)
+
+Increases the playspeed of the selected output by a configurable step per knob tick.
+
+Options:
+
+- Output
+- Speed step per tick (%)
+
+Use when:
+
+- Using a physical knob to increase replay speed
+- Ramping back up from slow motion to full speed
 
 ---
 
 ## Raw JSON-RPC
 
-Advanced manual command tool for testing or troubleshooting.
-
-Use when:
-
-- Testing a new command
-- Troubleshooting server communication
-- Verifying behavior before adding a dedicated action
-
-Recommended for advanced users only.
+Advanced manual command tool for testing or troubleshooting. Recommended for advanced users only.
 
 ---
 
 ## Reboot Server
 
-Reboots the DreamCatcher server.
-
-Use when:
-
-- A full server reboot is required
-- Directed by engineering or support
-- Normal service restart actions are not enough
-
-This is a high-impact action. Use carefully.
+Reboots the DreamCatcher server. This is a high-impact action. Use carefully.
 
 ---
 
@@ -360,11 +467,16 @@ Options:
 - Output
 - Cue Speed
 
+---
+
+## Refresh All Clips
+
+Reloads the clip name dropdown list from the system (up to 1000 clips). Runs automatically on connect.
+
 Use when:
 
-- You just created a clip and want to replay it quickly
-- You want a fast highlight workflow
-- You do not want to manually search for the newly created clip
+- New clips have been created since the last refresh
+- The clip name dropdown is empty or outdated
 
 ---
 
@@ -372,23 +484,11 @@ Use when:
 
 Refreshes available bins for Companion dropdowns.
 
-Use when:
-
-- Bins have changed
-- A bin dropdown is empty or outdated
-- You need Companion to reload bin information
-
 ---
 
 ## Refresh Export Profiles
 
 Refreshes available export profiles for Companion dropdowns.
-
-Use when:
-
-- Export profiles have changed
-- Export profile dropdowns are stale
-- You need Companion to reload export settings
 
 ---
 
@@ -396,23 +496,27 @@ Use when:
 
 Refreshes available input sources for Companion dropdowns.
 
-Use when:
-
-- Inputs have changed
-- Input dropdowns are empty
-- Routing actions do not show the expected sources
-
 ---
 
 ## Refresh Outputs
 
 Refreshes available DreamCatcher outputs for Companion dropdowns.
 
+---
+
+## Refresh Playlists
+
+Reloads both local playlists and session playlists. Runs automatically on connect.
+
+Options:
+
+- Session (optional — if provided, also loads playlists for that session)
+
 Use when:
 
-- Outputs have changed
-- Output dropdowns are empty
-- Companion is not showing the expected output names
+- New playlists have been created
+- Playlist dropdowns are empty or outdated
+- You have switched sessions and need session playlists to update
 
 ---
 
@@ -424,25 +528,22 @@ Options:
 
 - Session
 
-Use when:
-
-- You want Companion to reload clip names for a session
-- You are using session-based workflows
-- Clips were created after the last refresh
-
-Note: Session PBS workflows do not require browsing the clip dropdown, but this action is still useful for loading clip metadata and keeping session data current.
-
 ---
 
 ## Refresh Sessions
 
 Refreshes the list of available sessions.
 
+---
+
+## Restart Database
+
+Clears and restarts the DreamCatcher database service.
+
 Use when:
 
-- A new session was created
-- You switched sessions
-- The session dropdown is empty or outdated
+- Directed by engineering or support
+- Recovering from database-related issues
 
 ---
 
@@ -458,12 +559,6 @@ Options:
 - Restart VUE
 - Confirm Restart
 
-Use when:
-
-- Recovering from component-level issues
-- Restarting specific services without rebooting the full server
-- Troubleshooting control or output behavior
-
 The confirmation checkbox is included to reduce accidental restarts.
 
 ---
@@ -477,12 +572,6 @@ Options:
 - Input
 - Output
 
-Use when:
-
-- Monitoring a live source
-- Sending an input directly to an output
-- Quickly changing what an output is showing
-
 ---
 
 ## Scrub
@@ -492,20 +581,29 @@ Moves playback forward or backward by a specific number of frames.
 Options:
 
 - Output
-- Frames
+- Frames (positive = forward, negative = backward)
 
-Examples:
+---
 
-```text
-30 = forward 30 frames
--30 = backward 30 frames
-```
+## Scrub (Encoder / Knob)
 
-Use when:
+Scrubs the selected output forward by a configurable number of frames per knob tick. Assign to the rotate-right action of an encoder button. Use negative values to scrub backward.
 
-- Frame-accurate review
-- Checking replay timing
-- Fine-tuning clip marks
+Options:
+
+- Output
+- Frames per tick (negative = backwards)
+
+---
+
+## Scrub Back (Encoder / Knob)
+
+Scrubs the selected output backward by a configurable number of frames per knob tick. Assign to the rotate-left action of an encoder button.
+
+Options:
+
+- Output
+- Frames per tick (negative = backwards, default -5)
 
 ---
 
@@ -517,23 +615,11 @@ Options include:
 
 - Output
 - Number of boxes
-- Border thickness
-- Border color
+- Border thickness and color
 - Input/source for each box
-- Crop region for each box
-- Screen placement for each box
+- Crop and screen placement per box
 
-Supported layouts:
-
-- 2 box
-- 3 box
-- 4 box
-
-Use when:
-
-- Building a confidence monitor layout
-- Viewing multiple inputs on one output
-- Creating a custom operator monitoring view
+Supported layouts: 2 box, 3 box, 4 box
 
 ---
 
@@ -545,11 +631,20 @@ Options:
 
 - Output
 
+---
+
+## Skip Next Clip
+
+Skips the next clip in a playlist and jumps to the clip after it.
+
+Options:
+
+- Output
+
 Use when:
 
-- Taking an output dark
-- Clearing content from an output
-- Resetting an output to a safe state
+- You want to skip over a clip without playing it
+- Advancing past an unwanted clip in a sequence
 
 ---
 
@@ -557,23 +652,97 @@ Use when:
 
 Starts capture/recording.
 
-Use when:
-
-- Beginning event ingest
-- Starting replay recording
-- Preparing for live operation
-
 ---
 
 ## Stop Capture
 
 Stops capture/recording.
 
-Use when:
+---
 
-- Ending event ingest
-- Stopping replay recording
-- Wrapping up an event
+# Feedbacks
+
+Feedbacks dynamically change the colour and/or text of a button based on the live state of DreamCatcher. Add them to any button in Companion's button editor.
+
+---
+
+## Output Playing — Simple Green/Yellow/Red
+
+Changes the background colour of a button based on the current playspeed of the selected output.
+
+Options:
+
+- Output
+- Colour when playing at 100% (default green)
+- Colour when playing at 1–99% (default yellow)
+- Colour when stopped at 0% (default red)
+
+Also shows the output name and current speed percentage as button text.
+
+Update rate: every 500ms
+
+---
+
+## Output Status — Name + Time Remaining
+
+Provides a full status display on a button showing the output name, the current clip or playlist name (up to 15 characters), and the time remaining. Clip and playlist names are fetched automatically.
+
+- Green = playing at 100%
+- Yellow = playing at 1–99%
+- Red = stopped at 0%
+- Blue = live input routed to output
+
+The button text clears to show only the button's own label when the output is idle or has no status yet.
+
+Update rate: every 500ms
+
+---
+
+## Ping — Connection Status
+
+Measures the round-trip response time to DreamCatcher and displays it on the button.
+
+- Green + response time in ms = connected
+- Red + TIMEOUT = no response within 2 seconds
+- Grey = waiting for first poll
+
+Update rate: every 5 seconds
+
+---
+
+## Record Time Remaining
+
+Shows the remaining recording time from DreamCatcher's storage system as H:MM:SS on the button.
+
+Options:
+
+- Warning threshold in minutes (default 60 — button turns yellow)
+- Critical threshold in minutes (default 15 — button turns red)
+
+Update rate: every 5 seconds
+
+---
+
+## NAS Status
+
+Shows the connection status of a specific NAS mount. A dropdown lists all available mounts by their folder name.
+
+Options:
+
+- NAS Mount (dropdown — populates after first poll)
+
+- Green + CONNECTED = mount is online
+- Red + OFFLINE = mount is disconnected
+
+Update rate: every 5 seconds
+
+---
+
+## Timecode Display — System Time
+
+Shows the current system timecode as HH:MM:SS from the first Montage output. No configuration needed.
+
+Update rate: every 500ms
 
 ---
 
@@ -592,6 +761,12 @@ Includes:
 - Refresh Export Profiles
 - Refresh Sessions
 - Refresh Session Clips
+- Refresh All Clips
+- Refresh Playlists
+- Ping Monitor
+- Record Time Remaining
+- NAS Monitor
+- Timecode Display
 
 ## System Restart
 
@@ -605,6 +780,7 @@ Includes:
 - Restart AMP
 - Restart VUE
 - Reboot Server
+- Restart Database
 
 ## Output Control
 
@@ -619,6 +795,11 @@ Includes:
 - Goto In
 - Goto Out
 - Black Output
+- Scrub Knob (encoder)
+- Speed Knob (encoder)
+- Next Clip
+- Skip Next Clip
+- Output Status (with full feedback)
 
 ## Clip Workflow
 
@@ -630,10 +811,11 @@ Includes:
 - Mark Out
 - Create Clip
 - Recall Last Clip
+- Create Meta Mark
 
 ## Clip Hotkeys
 
-PBS/readable ID based clip recall tools.
+Clip recall tools using PBS addressing and name-based dropdowns.
 
 Includes:
 
@@ -641,6 +823,21 @@ Includes:
 - Play Clip by PBS
 - Cue Session Clip by PBS
 - Play Session Clip by PBS
+- Cue Clip Name Dropdown
+- Play Clip Name Dropdown
+- Cue Session Clip Dropdown
+- Play Session Clip Dropdown
+
+## Playlist Hotkeys
+
+Playlist cue and play controls.
+
+Includes:
+
+- Cue Playlist Dropdown
+- Play Playlist Dropdown
+- Cue Session Playlist Dropdown
+- Play Session Playlist Dropdown
 
 ## Mosaic
 
@@ -682,13 +879,28 @@ Includes:
 
 ---
 
+# Live Update Rates
+
+The module polls DreamCatcher automatically at the following intervals:
+
+| Data | Rate |
+|------|------|
+| Output playspeed, clip ID, timecode | Every 500ms |
+| Output state changes (clip/playlist changes) | Instant push from DreamCatcher |
+| Record time remaining, ping | Every 5 seconds |
+| NAS mount status | Every 5 seconds |
+| Clip names (on demand) | When a new clip is seen on an output |
+| Playlist names (on demand) | When a new playlist is seen on an output |
+
+---
+
 # Recommended Operator Workflow
 
 ## Before an event
 
 1. Confirm the DreamCatcher IP, port, and username are correct.
 2. Press **Refresh Connection**.
-3. Confirm outputs, inputs, sessions, and dropdowns populate correctly.
+3. Confirm outputs, inputs, sessions, clips, and playlist dropdowns populate correctly.
 4. Start capture if needed.
 
 ## During replay operation
@@ -699,11 +911,19 @@ Use:
 - **Mark Out**
 - **Create Clip**
 - **Recall Last Clip**
-- **Cue Session Clip by PBS**
-- **Play Session Clip by PBS**
+- **Cue Session Clip by PBS** or **Cue Clip Name Dropdown**
+- **Play Session Clip by PBS** or **Play Clip Name Dropdown**
+- **Cue Playlist Dropdown** or **Play Playlist Dropdown**
 - **Goto In**
 - **Goto Out**
 - **Goto Live**
+- **Create Meta Mark** (to tag significant moments)
+
+## Encoder / Knob workflows
+
+- Use the **Scrub Knob** preset for frame-accurate scrubbing
+- Use the **Speed Knob** preset to dial playspeed up and down with a physical knob
+- Frames per tick and speed step are configurable in each action's options
 
 ## If dropdowns look wrong
 
@@ -731,10 +951,28 @@ Press:
 Refresh Session Clips
 ```
 
+or
+
+```text
+Refresh All Clips
+```
+
+## If playlists are not showing
+
+Press:
+
+```text
+Refresh Playlists
+```
+
 ---
 
 # Notes
 
-- Refresh Connection is the safest first troubleshooting step for stale dropdowns.
+- **Refresh Connection** is the safest first troubleshooting step for stale dropdowns.
 - Output actions require the correct output selection.
 - Restart and reboot actions should be used carefully.
+- Clip and playlist dropdowns are loaded automatically on connect. Manual refresh is only needed if content has changed since connecting.
+- The **Output Status** feedback on a button shows the output name, clip name, and time remaining automatically — no manual updates required.
+- System monitor feedbacks (ping, record time, NAS) update automatically every 5 seconds with no operator action needed.
+- Meta marks are created with your configured username, not a generic system user.
