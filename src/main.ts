@@ -8,6 +8,8 @@ import {
 	type CompanionActionDefinitions,
 	type CompanionFeedbackDefinitions,
 	type CompanionPresetDefinitions,
+	type CompanionVariableDefinition,
+	type CompanionVariableValues,
 	type SomeCompanionConfigField,
 } from '@companion-module/base'
 
@@ -112,6 +114,7 @@ class DC extends InstanceBase<Config, undefined> {
 	private sessionClips: SessionClipInfo[] = []
 	private allClips: { id: string; name: string }[] = []
 	private outputStatuses = new Map<string, OutputStatus>()
+	private outputVarIds = new Map<string, string>() // output.id -> human-readable variable ID segment
 	private clipNames = new Map<string, string>()
 	private clipReadableIds = new Map<string, string>()  // clip_id -> readable_id
 	private playlistNames = new Map<string, string>()
@@ -140,6 +143,12 @@ class DC extends InstanceBase<Config, undefined> {
 		this.setActionDefinitions(this.getActions())
 		this.setFeedbackDefinitions(this.getFeedbacks())
 		this.setPresetDefinitions(this.getPresets())
+		this.setVariableDefinitions(this.getVariableDefinitions())
+		this.setVariableValues({
+			ping_ms: '--',
+			storage_time_remaining: '--',
+			system_timecode: '--:--:--',
+		})
 		this.connect()
 	}
 
@@ -156,6 +165,7 @@ class DC extends InstanceBase<Config, undefined> {
 		this.stopSystemInfoPolling()
 		this.tcp?.destroy()
 		this.outputs = []
+		this.outputVarIds = new Map()
 		this.inputs = []
 		this.bins = []
 		this.exportProfiles = []
@@ -168,6 +178,7 @@ class DC extends InstanceBase<Config, undefined> {
 		this.setActionDefinitions(this.getActions())
 		this.setFeedbackDefinitions(this.getFeedbacks())
 		this.setPresetDefinitions(this.getPresets())
+		this.setVariableDefinitions(this.getVariableDefinitions())
 		this.connect()
 	}
 
@@ -281,6 +292,7 @@ class DC extends InstanceBase<Config, undefined> {
 				}))
 				.filter((o: OutputInfo) => o.id.length > 0)
 
+			this.rebuildOutputVarIds()
 			this.log('info', `Discovered ${this.outputs.length} DreamCatcher outputs`)
 			this.refreshDefinitions()
 		}
@@ -472,6 +484,40 @@ class DC extends InstanceBase<Config, undefined> {
 		return String(value ?? '').replace(/\u0000/g, '').trim()
 	}
 
+	private sanitizeVarId(id: string): string {
+		return id.replace(/[^A-Za-z0-9_]/g, '_')
+	}
+
+	// Builds a human-readable variable ID segment per output, based on its name
+	// rather than its UUID (e.g. "Program_1" instead of "cf3bf9ab_1be6_..._name").
+	// Falls back to the sanitized UUID if the output has no name, and de-duplicates
+	// with a numeric suffix if multiple outputs share the same name.
+	private rebuildOutputVarIds(): void {
+		const nameCounts = new Map<string, number>()
+		const result = new Map<string, string>()
+
+		for (const output of this.outputs) {
+			const base = this.sanitizeVarId(output.name || output.id)
+			const count = (nameCounts.get(base) || 0) + 1
+			nameCounts.set(base, count)
+			result.set(output.id, count > 1 ? `${base}_${count}` : base)
+		}
+
+		this.outputVarIds = result
+	}
+
+	private getOutputVarId(outputId: string): string {
+		return this.outputVarIds.get(outputId) || this.sanitizeVarId(outputId)
+	}
+
+	private formatSeconds(secs: number | undefined): string {
+		if (secs === undefined) return '--'
+		const h = Math.floor(secs / 3600)
+		const m = Math.floor((secs % 3600) / 60)
+		const s = Math.floor(secs % 60)
+		return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+	}
+
 	private startPlayspeedPolling(): void {
 		this.stopPlayspeedPolling()
 		this.statusPollInterval = setInterval(() => {
@@ -506,6 +552,7 @@ class DC extends InstanceBase<Config, undefined> {
 		this.httpJsonRpc('get_storage_info', null, (result) => {
 			const elapsed = Date.now() - pingStart
 			this.lastPingMs = elapsed
+			this.setVariableValues({ ping_ms: `${elapsed}ms` })
 
 			// Parse storage info — data is nested under result.storage
 			if (result && typeof result === 'object') {
@@ -515,9 +562,10 @@ class DC extends InstanceBase<Config, undefined> {
 					timeRemainingSeconds: timeRemaining !== null ? Number(timeRemaining) : undefined,
 					raw: storage,
 				}
+				this.setVariableValues({ storage_time_remaining: this.formatSeconds(this.storageInfo.timeRemainingSeconds) })
 			}
 
-			this.checkFeedbacks('ping', 'storage_info', 'nas_info', 'timecode_display')
+			this.checkFeedbacks('ping_ok', 'ping_timeout', 'ping_unknown', 'storage_ok', 'storage_warn', 'storage_crit')
 		})
 
 		// NAS info — separate call
@@ -532,19 +580,28 @@ class DC extends InstanceBase<Config, undefined> {
 					})),
 					raw: result,
 				}
-				// Rebuild feedback definitions if mounts changed so dropdown updates
+
+				const nasVars: CompanionVariableValues = {}
+				for (const mount of this.nasInfo.mounts) {
+					const v = this.sanitizeVarId(mount.path)
+					nasVars[`nas_${v}_status`] = mount.connected ? 'CONNECTED' : 'OFFLINE'
+				}
+				this.setVariableValues(nasVars)
+
+				// Rebuild feedback/variable definitions if mounts changed so dropdowns update
 				if (prevCount !== this.nasInfo.mounts.length) {
 					this.refreshDefinitions()
 				}
 			}
-			this.checkFeedbacks('nas_info')
+			this.checkFeedbacks('nas_connected', 'nas_disconnected')
 		})
 
 		// Ping timeout — if ping hasn't returned in 2s, mark as failed
 		setTimeout(() => {
 			if (this.lastPingTime === pingStart && this.lastPingMs === null) {
 				this.lastPingMs = -1
-				this.checkFeedbacks('ping')
+				this.setVariableValues({ ping_ms: 'TIMEOUT' })
+				this.checkFeedbacks('ping_ok', 'ping_timeout', 'ping_unknown')
 			}
 		}, 2000)
 	}
@@ -558,7 +615,11 @@ class DC extends InstanceBase<Config, undefined> {
 			const name = String(result.name || result.dynamic_name || '')
 			if (name) {
 				this.clipNames.set(clipId, name)
-				this.checkFeedbacks('output_playing', 'output_playing_simple')
+
+				for (const [outputId, status] of this.outputStatuses) {
+					if (status.clip_id === clipId) this.updateOutputDisplayVariables(outputId)
+				}
+
 				this.log('debug', `Fetched clip name: ${clipId} -> ${name}`)
 			}
 		})
@@ -576,14 +637,76 @@ class DC extends InstanceBase<Config, undefined> {
 			const name = String(pl.name || pl.readable_id || pl.readableId || '')
 			if (name) {
 				this.playlistNames.set(playlistId, name)
-				this.checkFeedbacks('output_playing', 'output_playing_simple')
+
+				for (const [outputId, status] of this.outputStatuses) {
+					if (status.playlist_id === playlistId) this.updateOutputDisplayVariables(outputId)
+				}
+
 				this.log('debug', `Fetched playlist name: ${playlistId} -> ${name}`)
 			}
 		})
 	}
 
+	// Computes and pushes the "identifier" (clip/playlist/live name) and "time remaining"
+	// variables for a single output. Triggers a clip/playlist name fetch if needed.
+	private updateOutputDisplayVariables(outputId: string): void {
+		const status = this.outputStatuses.get(outputId)
+		if (!status) return
+
+		const v = this.getOutputVarId(outputId)
+		const timecode = status.timecode.replace(/^(00:)+/, '') || '--:--'
+
+		// Live input — clip_id matches a known input UUID
+		const isLive = !!status.clip_id && this.inputs.some((i) => i.id === status.clip_id)
+		if (isLive) {
+			const rawName = this.inputs.find((i) => i.id === status.clip_id)?.name || 'LIVE'
+			this.setVariableValues({
+				[`output_${v}_identifier`]: rawName,
+				[`output_${v}_time`]: timecode,
+			})
+			return
+		}
+
+		// Idle — no clip loaded
+		if (!status.clip_id) {
+			this.setVariableValues({
+				[`output_${v}_identifier`]: '',
+				[`output_${v}_time`]: timecode,
+			})
+			return
+		}
+
+		// If we don't have the clip name yet, fetch it on demand
+		if (!this.clipNames.has(status.clip_id)) {
+			this.fetchClipName(status.clip_id)
+		}
+
+		const isPlaylist = !!status.playlist_id
+		const rawTime = isPlaylist ? status.playlist_time_remaining : status.clip_time_remaining
+		const cleanTime = rawTime.replace(/^(00:)+/, '').replace(/^0+(?=\d)/, '')
+		const time = cleanTime && cleanTime !== '0' && cleanTime !== '.00' ? cleanTime : timecode
+
+		let identifier: string
+		if (isPlaylist) {
+			if (!this.playlistNames.has(status.playlist_id)) {
+				this.fetchPlaylistName(status.playlist_id)
+			}
+			const name = this.playlistNames.get(status.playlist_id) || '?'
+			identifier = name
+		} else {
+			identifier = this.clipNames.get(status.clip_id) || '?'
+		}
+
+		this.setVariableValues({
+			[`output_${v}_identifier`]: identifier,
+			[`output_${v}_time`]: time,
+		})
+	}
+
 	private handleOutputStatusUpdate(statuses: any[]): void {
 		let changed = false
+		const varValues: CompanionVariableValues = {}
+		const touchedOutputIds: string[] = []
 
 		for (const s of statuses) {
 			const outputId = String(s.id || '')
@@ -606,10 +729,40 @@ class DC extends InstanceBase<Config, undefined> {
 
 			this.outputStatuses.set(outputId, updated)
 			changed = true
+			touchedOutputIds.push(outputId)
+
+			const v = this.getOutputVarId(outputId)
+			varValues[`output_${v}_name`] = updated.name
+			varValues[`output_${v}_speed`] = String(updated.playspeed)
+			varValues[`output_${v}_timecode`] = updated.timecode.replace(/^(00:)+/, '') || ''
+		}
+
+		if (Object.keys(varValues).length > 0) {
+			this.setVariableValues(varValues)
+		}
+
+		for (const outputId of touchedOutputIds) {
+			this.updateOutputDisplayVariables(outputId)
+		}
+
+		// System timecode — first Montage-named output, else the first output
+		if (this.outputs.length > 0) {
+			const montageOutput = this.outputs.find((o) => o.name.toLowerCase().includes('montage')) || this.outputs[0]
+			const st = this.outputStatuses.get(montageOutput.id)
+			const tc = st?.timecode?.replace(/\..*$/, '') || '--:--:--'
+			this.setVariableValues({ system_timecode: tc })
 		}
 
 		if (changed) {
-			this.checkFeedbacks('output_playing', 'output_playing_simple')
+			this.checkFeedbacks(
+				'output_full_speed',
+				'output_slow',
+				'output_stopped',
+				'output_live',
+				'output_idle',
+				'output_has_clip',
+				'output_has_playlist',
+			)
 		}
 	}
 
@@ -617,6 +770,7 @@ class DC extends InstanceBase<Config, undefined> {
 		this.setActionDefinitions(this.getActions())
 		this.setFeedbackDefinitions(this.getFeedbacks())
 		this.setPresetDefinitions(this.getPresets())
+		this.setVariableDefinitions(this.getVariableDefinitions())
 	}
 
 	private extractArray(value: any): any[] {
@@ -2281,31 +2435,92 @@ class DC extends InstanceBase<Config, undefined> {
 		}
 	}
 
+	// Returns the definitions for all Companion variables this module exposes.
+	// Called from init(), configUpdated(), and refreshDefinitions() so the
+	// per-output and per-NAS-mount variables stay in sync as those lists change.
+	private getVariableDefinitions(): CompanionVariableDefinition[] {
+		const defs: CompanionVariableDefinition[] = [
+			{ variableId: 'ping_ms', name: 'Ping (ms / TIMEOUT)' },
+			{ variableId: 'storage_time_remaining', name: 'Storage Time Remaining (H:MM:SS)' },
+			{ variableId: 'system_timecode', name: 'System Timecode' },
+		]
+
+		for (const output of this.outputs) {
+			const v = this.getOutputVarId(output.id)
+			defs.push(
+				{ variableId: `output_${v}_name`, name: `${output.name} - Name` },
+				{ variableId: `output_${v}_speed`, name: `${output.name} - Speed (%)` },
+				{ variableId: `output_${v}_identifier`, name: `${output.name} - Clip/Playlist/Live Name` },
+				{ variableId: `output_${v}_time`, name: `${output.name} - Time Remaining` },
+				{ variableId: `output_${v}_timecode`, name: `${output.name} - Timecode` },
+			)
+		}
+
+		for (const mount of this.nasInfo.mounts) {
+			const v = this.sanitizeVarId(mount.path)
+			defs.push({ variableId: `nas_${v}_status`, name: `NAS ${mount.name} - Status` })
+		}
+
+		return defs
+	}
+
 	private getFeedbacks(): CompanionFeedbackDefinitions {
 		return {
-			ping: {
-				type: 'advanced',
-				name: 'Ping — Connection Status',
-				description: 'Green when DreamCatcher responds within 2s, red if no response.',
+			ping_ok: {
+				type: 'boolean',
+				name: 'Ping OK',
+				description: 'True when DreamCatcher responded within the last poll (green by default).',
+				defaultStyle: { bgcolor: combineRgb(0, 150, 0), color: combineRgb(255, 255, 255) },
 				options: [],
-				callback: () => {
-					if (this.lastPingMs === null) {
-						return { bgcolor: combineRgb(80, 80, 80), text: 'PING\n--' }
-					}
-					if (this.lastPingMs < 0) {
-						return { bgcolor: combineRgb(160, 0, 0), text: 'PING\nTIMEOUT' }
-					}
-					return {
-						bgcolor: combineRgb(0, 150, 0),
-						text: `PING\n${this.lastPingMs}ms`,
-					}
+				callback: () => this.lastPingMs !== null && this.lastPingMs >= 0,
+			},
+
+			ping_timeout: {
+				type: 'boolean',
+				name: 'Ping Timeout',
+				description: 'True when DreamCatcher has not responded within 2s (red by default).',
+				defaultStyle: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
+				options: [],
+				callback: () => this.lastPingMs !== null && this.lastPingMs < 0,
+			},
+
+			ping_unknown: {
+				type: 'boolean',
+				name: 'Ping Unknown',
+				description: 'True before the first ping has completed (grey by default).',
+				defaultStyle: { bgcolor: combineRgb(80, 80, 80), color: combineRgb(255, 255, 255) },
+				options: [],
+				callback: () => this.lastPingMs === null,
+			},
+
+			storage_ok: {
+				type: 'boolean',
+				name: 'Storage Time OK',
+				description: 'True when recording time remaining is above the warning threshold.',
+				defaultStyle: { bgcolor: combineRgb(0, 100, 0), color: combineRgb(255, 255, 255) },
+				options: [
+					{
+						type: 'number',
+						id: 'warn_minutes',
+						label: 'Warning threshold (minutes remaining)',
+						default: 60,
+						min: 1,
+						max: 9999,
+					},
+				],
+				callback: (feedback) => {
+					const secs = this.storageInfo.timeRemainingSeconds
+					if (secs === undefined) return false
+					const warn = Number(feedback.options.warn_minutes ?? 60) * 60
+					return secs > warn
 				},
 			},
 
-			storage_info: {
-				type: 'advanced',
-				name: 'Record Time Remaining',
-				description: 'Shows recording time remaining from get_storage_info. Green = plenty, yellow = low, red = critical.',
+			storage_warn: {
+				type: 'boolean',
+				name: 'Storage Time Warning',
+				description: 'True when recording time remaining is between the critical and warning thresholds.',
+				defaultStyle: { bgcolor: combineRgb(180, 150, 0), color: combineRgb(255, 255, 255) },
 				options: [
 					{
 						type: 'number',
@@ -2326,38 +2541,41 @@ class DC extends InstanceBase<Config, undefined> {
 				],
 				callback: (feedback) => {
 					const secs = this.storageInfo.timeRemainingSeconds
-					if (secs === undefined) {
-						return { bgcolor: combineRgb(80, 80, 80), text: 'REC TIME\n--' }
-					}
-
+					if (secs === undefined) return false
 					const warn = Number(feedback.options.warn_minutes ?? 60) * 60
 					const crit = Number(feedback.options.crit_minutes ?? 15) * 60
-
-					let bgcolor: number
-					if (secs <= crit) {
-						bgcolor = combineRgb(160, 0, 0)
-					} else if (secs <= warn) {
-						bgcolor = combineRgb(180, 150, 0)
-					} else {
-						bgcolor = combineRgb(0, 100, 0)
-					}
-
-					const h = Math.floor(secs / 3600)
-					const m = Math.floor((secs % 3600) / 60)
-					const s = Math.floor(secs % 60)
-					const timeStr = `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-
-					return {
-						bgcolor,
-						text: `REC TIME\n${timeStr}`,
-					}
+					return secs <= warn && secs > crit
 				},
 			},
 
-			nas_info: {
-				type: 'advanced',
-				name: 'NAS Status',
-				description: 'Shows connected/disconnected status for a specific NAS mount.',
+			storage_crit: {
+				type: 'boolean',
+				name: 'Storage Time Critical',
+				description: 'True when recording time remaining is at or below the critical threshold.',
+				defaultStyle: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
+				options: [
+					{
+						type: 'number',
+						id: 'crit_minutes',
+						label: 'Critical threshold (minutes remaining)',
+						default: 15,
+						min: 1,
+						max: 9999,
+					},
+				],
+				callback: (feedback) => {
+					const secs = this.storageInfo.timeRemainingSeconds
+					if (secs === undefined) return false
+					const crit = Number(feedback.options.crit_minutes ?? 15) * 60
+					return secs <= crit
+				},
+			},
+
+			nas_connected: {
+				type: 'boolean',
+				name: 'NAS Connected',
+				description: 'True when the selected NAS mount is connected.',
+				defaultStyle: { bgcolor: combineRgb(0, 150, 0), color: combineRgb(255, 255, 255) },
 				options: [
 					{
 						type: 'dropdown',
@@ -2370,184 +2588,130 @@ class DC extends InstanceBase<Config, undefined> {
 					},
 				],
 				callback: (feedback) => {
-					const mountPath = String(feedback.options.mount || '')
-					const mount = this.nasInfo.mounts.find((m) => m.path === mountPath)
-
-					if (!mount) {
-						return { bgcolor: combineRgb(80, 80, 80), text: 'NAS\n--' }
-					}
-
-					return {
-						bgcolor: mount.connected ? combineRgb(0, 150, 0) : combineRgb(160, 0, 0),
-						text: `${mount.name}\n${mount.connected ? 'CONNECTED' : 'OFFLINE'}`,
-					}
+					const mount = this.nasInfo.mounts.find((m) => m.path === String(feedback.options.mount || ''))
+					return !!mount?.connected
 				},
 			},
 
-			timecode_display: {
-				type: 'advanced',
-				name: 'Timecode Display — System Time',
-				description: 'Shows the current system timecode from the first Montage output.',
-				options: [],
-				callback: () => {
-					// Use the first MontageOutput for system time
-					const montageOutput = this.outputs.find((o) =>
-						o.name.toLowerCase().includes('montage')
-					) || this.outputs[0]
-
-					const status = montageOutput ? this.outputStatuses.get(montageOutput.id) : undefined
-					const tc = status?.timecode?.replace(/\..*$/, '') || '--:--:--'
-
-					return {
-						bgcolor: combineRgb(0, 0, 80),
-						text: `SYSTEM TIME\n${tc}`,
-					}
-				},
-			},
-
-			output_playing_simple: {
-				type: 'advanced',
-				name: 'Output Playing — Simple Green/Yellow/Red',
-				description: 'Green at 100%, yellow at 1-99%, red at 0%. Shows output name and speed.',
+			nas_disconnected: {
+				type: 'boolean',
+				name: 'NAS Disconnected',
+				description: 'True when the selected NAS mount is offline.',
+				defaultStyle: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
 				options: [
 					{
 						type: 'dropdown',
-						id: 'output',
-						label: 'Output',
-						choices: this.outputChoices(),
-						default: this.defaultOutputId(),
-					},
-					{
-						type: 'colorpicker',
-						id: 'color_playing',
-						label: 'Colour at 100% (full speed)',
-						default: combineRgb(0, 150, 0),
-					},
-					{
-						type: 'colorpicker',
-						id: 'color_slow',
-						label: 'Colour at 1–99% (slow/varispeed)',
-						default: combineRgb(180, 150, 0),
-					},
-					{
-						type: 'colorpicker',
-						id: 'color_stopped',
-						label: 'Colour at 0% (stopped/paused)',
-						default: combineRgb(160, 0, 0),
+						id: 'mount',
+						label: 'NAS Mount',
+						choices: this.nasInfo.mounts.length > 0
+							? this.nasInfo.mounts.map((m) => ({ id: m.path, label: m.name }))
+							: [{ id: '', label: 'No mounts — wait for poll' }],
+						default: this.nasInfo.mounts[0]?.path || '',
 					},
 				],
 				callback: (feedback) => {
-					const outputId = String(feedback.options.output || '')
-					const status = this.outputStatuses.get(outputId)
-
-					if (!status) return {}
-
-					const outputName = status.name
-						|| this.outputs.find((o) => o.id === outputId)?.name
-						|| 'OUTPUT'
-
-					let bgcolor: number
-					if (status.playspeed === 100) {
-						bgcolor = Number(feedback.options.color_playing)
-					} else if (status.playspeed > 0) {
-						bgcolor = Number(feedback.options.color_slow)
-					} else {
-						bgcolor = Number(feedback.options.color_stopped)
-					}
-
-					return {
-						bgcolor,
-						text: `${outputName}\n${status.playspeed}%`,
-					}
+					const mount = this.nasInfo.mounts.find((m) => m.path === String(feedback.options.mount || ''))
+					return mount ? !mount.connected : false
 				},
 			},
 
-			output_playing: {
-				type: 'advanced',
-				name: 'Output Status — Name + Time Remaining',
-				description: 'Shows the output name and clip/playlist time remaining. Green = playing, Yellow = paused/0%, Red = nothing playing.',
+			output_full_speed: {
+				type: 'boolean',
+				name: 'Output at Full Speed (100%)',
+				description: 'True when the selected output is playing at 100% speed.',
+				defaultStyle: { bgcolor: combineRgb(0, 150, 0), color: combineRgb(255, 255, 255) },
 				options: [
-					{
-						type: 'dropdown',
-						id: 'output',
-						label: 'Output',
-						choices: this.outputChoices(),
-						default: this.defaultOutputId(),
-					},
+					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
 				],
 				callback: (feedback) => {
-					const outputId = String(feedback.options.output || '')
-					const status = this.outputStatuses.get(outputId)
+					const status = this.outputStatuses.get(String(feedback.options.output || ''))
+					return status?.playspeed === 100
+				},
+			},
 
-					// No status yet — don't override button text at all
-					if (!status) {
-						return {}
-					}
+			output_slow: {
+				type: 'boolean',
+				name: 'Output Slow / Varispeed (1-99%)',
+				description: 'True when the selected output is playing between 1% and 99% speed.',
+				defaultStyle: { bgcolor: combineRgb(180, 150, 0), color: combineRgb(255, 255, 255) },
+				options: [
+					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
+				],
+				callback: (feedback) => {
+					const status = this.outputStatuses.get(String(feedback.options.output || ''))
+					return !!status && status.playspeed > 0 && status.playspeed < 100
+				},
+			},
 
-					const outputName = status?.name
-						|| this.outputs.find((o) => o.id === outputId)?.name
-						|| 'OUTPUT'
+			output_stopped: {
+				type: 'boolean',
+				name: 'Output Stopped / Paused (0%)',
+				description: 'True when the selected output is stopped or paused.',
+				defaultStyle: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
+				options: [
+					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
+				],
+				callback: (feedback) => {
+					const status = this.outputStatuses.get(String(feedback.options.output || ''))
+					return !status || status.playspeed === 0
+				},
+			},
 
-					const timecode = status.timecode.replace(/^(00:)+/, '') || '--:--'
+			output_live: {
+				type: 'boolean',
+				name: 'Output Showing Live Input',
+				description: 'True when the selected output is showing a live input rather than a clip/playlist.',
+				defaultStyle: { bgcolor: combineRgb(0, 75, 160), color: combineRgb(255, 255, 255) },
+				options: [
+					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
+				],
+				callback: (feedback) => {
+					const status = this.outputStatuses.get(String(feedback.options.output || ''))
+					return !!status?.clip_id && this.inputs.some((i) => i.id === status.clip_id)
+				},
+			},
 
-					// Live input — clip_id matches a known input UUID
-					const isLive = !!status.clip_id && this.inputs.some((i) => i.id === status.clip_id)
-					if (isLive) {
-						const rawName = this.inputs.find((i) => i.id === status.clip_id)?.name || 'LIVE'
-						const inputName = rawName.length > 15 ? rawName.slice(0, 15) : rawName
-						return {
-							bgcolor: combineRgb(0, 75, 160),
-							text: `${outputName}\n${inputName}\n${timecode}`,
-						}
-					}
+			output_idle: {
+				type: 'boolean',
+				name: 'Output Idle / Nothing Loaded',
+				description: 'True when the selected output has no clip or input loaded.',
+				defaultStyle: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
+				options: [
+					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
+				],
+				callback: (feedback) => {
+					const status = this.outputStatuses.get(String(feedback.options.output || ''))
+					return !status?.clip_id
+				},
+			},
 
-					// Idle — no clip, just show red with no text override
-					if (!status.clip_id) {
-						return {
-							bgcolor: combineRgb(160, 0, 0),
-						}
-					}
+			output_has_clip: {
+				type: 'boolean',
+				name: 'Output Showing a Clip',
+				description: 'True when the selected output has a single clip loaded (not a playlist, not live).',
+				defaultStyle: { bgcolor: combineRgb(0, 100, 70), color: combineRgb(255, 255, 255) },
+				options: [
+					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
+				],
+				callback: (feedback) => {
+					const status = this.outputStatuses.get(String(feedback.options.output || ''))
+					if (!status?.clip_id) return false
+					if (this.inputs.some((i) => i.id === status.clip_id)) return false
+					return !status.playlist_id
+				},
+			},
 
-					// If we don't have the clip name yet, fetch it on demand
-					if (!this.clipNames.has(status.clip_id)) {
-						this.fetchClipName(status.clip_id)
-					}
-
-					// Playlist or clip
-					const isPlaylist = !!status.playlist_id
-					const rawTime = isPlaylist ? status.playlist_time_remaining : status.clip_time_remaining
-					const cleanTime = rawTime.replace(/^(00:)+/, '').replace(/^0+(?=\d)/, '')
-					const time = cleanTime && cleanTime !== '0' && cleanTime !== '.00'
-						? cleanTime
-						: timecode
-
-					let identifier: string
-					if (isPlaylist) {
-						if (!this.playlistNames.has(status.playlist_id)) {
-							this.fetchPlaylistName(status.playlist_id)
-						}
-						const name = this.playlistNames.get(status.playlist_id) || '?'
-						identifier = name.length > 15 ? name.slice(0, 15) : name
-					} else {
-						const rawName = this.clipNames.get(status.clip_id)
-						const name = rawName || '?'
-						identifier = name.length > 15 ? name.slice(0, 15) : name
-					}
-
-					// 100% = green, 1-99% = yellow, 0% = red
-					let bgcolor: number
-					if (status.playspeed === 100) {
-						bgcolor = combineRgb(0, 150, 0)
-					} else if (status.playspeed > 0) {
-						bgcolor = combineRgb(180, 150, 0)
-					} else {
-						bgcolor = combineRgb(160, 0, 0)
-					}
-
-					return {
-						bgcolor,
-						text: `${outputName}\n${identifier}\n${time}`,
-					}
+			output_has_playlist: {
+				type: 'boolean',
+				name: 'Output Showing a Playlist',
+				description: 'True when the selected output is playing back a playlist.',
+				defaultStyle: { bgcolor: combineRgb(45, 45, 120), color: combineRgb(255, 255, 255) },
+				options: [
+					{ type: 'dropdown', id: 'output', label: 'Output', choices: this.outputChoices(), default: this.defaultOutputId() },
+				],
+				callback: (feedback) => {
+					const status = this.outputStatuses.get(String(feedback.options.output || ''))
+					return !!status?.playlist_id
 				},
 			},
 		}
@@ -2557,6 +2721,9 @@ class DC extends InstanceBase<Config, undefined> {
 		const out1 = this.defaultOutputId()
 		const firstTwo = '__FIRST_TWO__'
 		const allOutputs = '__ALL__'
+		const label = this.label
+		const out1Var = this.getOutputVarId(out1)
+		const firstMount = this.nasInfo.mounts[0]
 
 		return {
 			restart_all_components: {
@@ -2737,36 +2904,95 @@ class DC extends InstanceBase<Config, undefined> {
 				type: 'button',
 				category: 'System',
 				name: 'Ping Monitor',
-				style: { text: 'PING\n--', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(80, 80, 80) },
+				style: {
+					text: `PING\n$(${label}:ping_ms)`,
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(80, 80, 80),
+				},
 				steps: [{ down: [], up: [] }],
-				feedbacks: [{ feedbackId: 'ping', options: {} }],
+				feedbacks: [
+					{ feedbackId: 'ping_ok', options: {}, style: { bgcolor: combineRgb(0, 150, 0), color: combineRgb(255, 255, 255) } },
+					{
+						feedbackId: 'ping_timeout',
+						options: {},
+						style: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'ping_unknown',
+						options: {},
+						style: { bgcolor: combineRgb(80, 80, 80), color: combineRgb(255, 255, 255) },
+					},
+				],
 			},
 
 			storage_monitor: {
 				type: 'button',
 				category: 'System',
 				name: 'Record Time Remaining',
-				style: { text: 'REC TIME\n--', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(80, 80, 80) },
+				style: {
+					text: `REC TIME\n$(${label}:storage_time_remaining)`,
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(80, 80, 80),
+				},
 				steps: [{ down: [], up: [] }],
-				feedbacks: [{ feedbackId: 'storage_info', options: { warn_minutes: 60, crit_minutes: 15 } }],
+				feedbacks: [
+					{
+						feedbackId: 'storage_ok',
+						options: { warn_minutes: 60 },
+						style: { bgcolor: combineRgb(0, 100, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'storage_warn',
+						options: { warn_minutes: 60, crit_minutes: 15 },
+						style: { bgcolor: combineRgb(180, 150, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'storage_crit',
+						options: { crit_minutes: 15 },
+						style: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
+					},
+				],
 			},
 
 			nas_monitor: {
 				type: 'button',
 				category: 'System',
 				name: 'NAS Monitor',
-				style: { text: 'NAS\n--', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(80, 80, 80) },
+				style: {
+					text: firstMount ? `NAS\n$(${label}:nas_${this.sanitizeVarId(firstMount.path)}_status)` : 'NAS\n--',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(80, 80, 80),
+				},
 				steps: [{ down: [], up: [] }],
-				feedbacks: [{ feedbackId: 'nas_info', options: {} }],
+				feedbacks: [
+					{
+						feedbackId: 'nas_connected',
+						options: { mount: firstMount?.path || '' },
+						style: { bgcolor: combineRgb(0, 150, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'nas_disconnected',
+						options: { mount: firstMount?.path || '' },
+						style: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
+					},
+				],
 			},
 
 			timecode_monitor: {
 				type: 'button',
 				category: 'System',
 				name: 'Timecode Display',
-				style: { text: 'SYSTEM TIME\n--:--:--', size: '24', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 0, 80) },
+				style: {
+					text: `SYSTEM TIME\n$(${label}:system_timecode)`,
+					size: '24',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(0, 0, 80),
+				},
 				steps: [{ down: [], up: [] }],
-				feedbacks: [{ feedbackId: 'timecode_display', options: {} }],
+				feedbacks: [],
 			},
 
 			next_clip_preset: {
@@ -2827,13 +3053,19 @@ class DC extends InstanceBase<Config, undefined> {
 				steps: [{ down: [{ actionId: 'play', options: { output: out1, speed: 100 } }], up: [] }],
 				feedbacks: [
 					{
-						feedbackId: 'output_playing_simple',
-						options: {
-							output: out1,
-							color_playing: combineRgb(0, 150, 0),
-							color_slow: combineRgb(180, 150, 0),
-							color_stopped: combineRgb(160, 0, 0),
-						},
+						feedbackId: 'output_full_speed',
+						options: { output: out1 },
+						style: { bgcolor: combineRgb(0, 150, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'output_slow',
+						options: { output: out1 },
+						style: { bgcolor: combineRgb(180, 150, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'output_stopped',
+						options: { output: out1 },
+						style: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
 					},
 				],
 			},
@@ -2898,13 +3130,19 @@ class DC extends InstanceBase<Config, undefined> {
 				],
 				feedbacks: [
 					{
-						feedbackId: 'output_playing_simple',
-						options: {
-							output: out1,
-							color_playing: combineRgb(0, 150, 0),
-							color_slow: combineRgb(180, 150, 0),
-							color_stopped: combineRgb(160, 0, 0),
-						},
+						feedbackId: 'output_full_speed',
+						options: { output: out1 },
+						style: { bgcolor: combineRgb(0, 150, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'output_slow',
+						options: { output: out1 },
+						style: { bgcolor: combineRgb(180, 150, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'output_stopped',
+						options: { output: out1 },
+						style: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
 					},
 				],
 			},
@@ -2936,17 +3174,41 @@ class DC extends InstanceBase<Config, undefined> {
 				feedbacks: [],
 			},
 
-			// Output Control + Feedback — single preset with full status feedback
+			// Output Control + Feedback — dynamic text (name/clip/time) via variables,
+			// dynamic colour via stacked boolean feedbacks
 			output_status_feedback: {
 				type: 'button',
 				category: 'Output Control + Feedback',
 				name: 'Output Status',
-				style: { text: 'OUTPUT\nSTATUS', size: '14', color: combineRgb(255, 255, 255), bgcolor: combineRgb(0, 120, 0) },
+				style: {
+					text: out1
+						? `$(${label}:output_${out1Var}_name)\n$(${label}:output_${out1Var}_identifier)\n$(${label}:output_${out1Var}_time)`
+						: 'OUTPUT\nSTATUS',
+					size: '14',
+					color: combineRgb(255, 255, 255),
+					bgcolor: combineRgb(0, 120, 0),
+				},
 				steps: [{ down: [{ actionId: 'play', options: { output: out1, speed: 100 } }], up: [] }],
 				feedbacks: [
 					{
-						feedbackId: 'output_playing',
+						feedbackId: 'output_full_speed',
 						options: { output: out1 },
+						style: { bgcolor: combineRgb(0, 150, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'output_slow',
+						options: { output: out1 },
+						style: { bgcolor: combineRgb(180, 150, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'output_stopped',
+						options: { output: out1 },
+						style: { bgcolor: combineRgb(160, 0, 0), color: combineRgb(255, 255, 255) },
+					},
+					{
+						feedbackId: 'output_live',
+						options: { output: out1 },
+						style: { bgcolor: combineRgb(0, 75, 160), color: combineRgb(255, 255, 255) },
 					},
 				],
 			},
