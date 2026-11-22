@@ -18,10 +18,10 @@
 		"LICENSE"
 	],
 	"dependencies": {
-		"@companion-module/base": "^1.12.0"
+		"@companion-module/base": "^1.15.1"
 	},
 	"devDependencies": {
-		"@companion-module/tools": "2.8.0",
+		"@companion-module/tools": "2.9.1",
 		"@types/node": "^20.0.0",
 		"prettier": "^3.8.3",
 		"rimraf": "^5.0.10",
